@@ -2,12 +2,14 @@ from fastapi import APIRouter, Depends, Response, BackgroundTasks
 from sqlmodel import Session, select
 from typing import List
 import logging
+from datetime import datetime
 
 from app.db.database import get_session, engine
 from app.clients.core_client import core_client
-from app.models.integration_models import Producto
+from app.models.integration_models import Producto, InventarioLocal
 from app.schemas.auth_schemas import ProductoResponse
 from app.api.deps import get_current_user_payload
+from app.core.config import settings
 
 logger = logging.getLogger("RouterProductos")
 router = APIRouter(prefix="/productos", tags=["Catálogo de Productos"])
@@ -16,8 +18,10 @@ router = APIRouter(prefix="/productos", tags=["Catálogo de Productos"])
 def sincronizar_cache_productos(core_data: list):
     with Session(engine) as db_background:
         try:
-            nuevos = 0
-            actualizados = 0
+            prod_nuevos = 0
+            prod_actualizados = 0
+            inv_nuevos = 0
+            inv_actualizados = 0
 
             for item in core_data:
                 prod_local = db_background.exec(
@@ -25,17 +29,12 @@ def sincronizar_cache_productos(core_data: list):
                 ).first()
 
                 if prod_local:
-                    prod_local.sku = item.get("sku")
+                    prod_local.sku = item.get("sku", prod_local.sku)
                     prod_local.nombre = item.get("nombre")
                     prod_local.precio_base = item.get("precio_base")
                     prod_local.es_inventariable = item.get("es_inventariable", True)
-
-                    if hasattr(prod_local, "activo"):
-                        prod_local.activo = item.get("activo", True)
-
                     db_background.add(prod_local)
-                    actualizados += 1
-
+                    prod_actualizados += 1
                 else:
                     nuevo_prod = Producto(
                         id=item.get("id"),
@@ -46,18 +45,41 @@ def sincronizar_cache_productos(core_data: list):
                         precio_base=item.get("precio_base"),
                         es_inventariable=item.get("es_inventariable", True),
                     )
-
-                    if hasattr(nuevo_prod, "activo"):
-                        nuevo_prod.activo = item.get("activo", True)
-
                     db_background.add(nuevo_prod)
-                    nuevos += 1
+                    prod_nuevos += 1
+
+                if item.get("es_inventariable", True):
+
+                    inv_local = db_background.exec(
+                        select(InventarioLocal).where(
+                            InventarioLocal.producto_id == item.get("id"),
+                            InventarioLocal.sucursal_id == settings.SUCURSAL_ID
+                        )
+                    ).first()
+
+                    stock_fresco = item.get("cantidad_disponible", 0)
+
+                    if inv_local:
+                        inv_local.cantidad_disponible = stock_fresco
+                        inv_local.ultima_sincronizacion = datetime.utcnow()
+                        db_background.add(inv_local)
+                        inv_actualizados += 1
+                    else:
+                        nuevo_inv = InventarioLocal(
+                            producto_id=item.get("id"),
+                            sucursal_id=settings.SUCURSAL_ID,
+                            cantidad_disponible=stock_fresco,
+                            ultima_sincronizacion=datetime.utcnow()
+                        )
+                        db_background.add(nuevo_inv)
+                        inv_nuevos += 1
 
             db_background.commit()
-            logger.info(f"[CACHE REFRESH] Sincronización exitosa: {nuevos} insertados, {actualizados} actualizados.")
+            logger.info(
+                f"[CACHE REFRESH] Sincronización exitosa. Productos (N:{prod_nuevos}, A:{prod_actualizados}) | Inventario (N:{inv_nuevos}, A:{inv_actualizados})")
 
         except Exception as e:
-            logger.error(f"[ERROR CACHE] Falló la sincronización en segundo plano: {str(e)}")
+            logger.error(f"[ERROR CACHE] Falló la sincronización doble: {str(e)}")
             db_background.rollback()
 
 

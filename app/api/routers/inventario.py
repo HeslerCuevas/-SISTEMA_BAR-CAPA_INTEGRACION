@@ -55,7 +55,7 @@ async def registrar_movimiento(
         producto_id=movimiento.producto_id,
         cantidad=movimiento.cantidad,
         motivo=movimiento.motivo,
-        estado_sync="PENDIENTE"
+        estado_sincronizacion="PENDIENTE"
     )
     db.add(nuevo_movimiento)
     db.commit()
@@ -72,7 +72,7 @@ async def registrar_movimiento(
     respuesta_core = await core_client.post("/inventario/movimiento", data=payload_core)
 
     if respuesta_core:
-        nuevo_movimiento.estado_sync = "COMPLETADO"
+        nuevo_movimiento.estado_sincronizacion = "COMPLETADO"
         db.add(nuevo_movimiento)
         db.commit()
 
