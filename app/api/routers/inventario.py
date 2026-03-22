@@ -4,9 +4,9 @@ import logging
 
 from app.db.database import get_session
 from app.clients.core_client import core_client
-from app.models.integration_models import Producto
+from app.models.integration_models import Producto, MovimientoOffline
 from app.api.deps import get_current_user_payload
-from app.schemas.inventario_schemas import MovimientoCreate, MovimientoOffline
+from app.schemas.inventario_schemas import MovimientoCreate
 
 logger = logging.getLogger("RouterInventario")
 router = APIRouter(prefix="/inventario", tags=["Módulo de Inventario"])
