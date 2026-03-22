@@ -2,9 +2,7 @@ import os
 import httpx
 import logging
 from typing import Optional, Dict, Any
-from dotenv import load_dotenv
-
-load_dotenv()
+from app.core.config import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("CoreClient")
@@ -12,10 +10,8 @@ logger = logging.getLogger("CoreClient")
 
 class CoreClient:
     def __init__(self):
-        self.base_url = os.getenv("CORE_URL")
-
-        self.gateway_token = os.getenv("CORE_SECRET_KEY")
-
+        self.base_url = settings.CORE_URL
+        self.gateway_token = settings.CORE_SECRET_KEY
         self.timeout = httpx.Timeout(5.0, connect=2.0)
 
     async def get(self, endpoint: str, headers: Optional[Dict] = None, params: Optional[Dict] = None) -> Optional[Any]:
