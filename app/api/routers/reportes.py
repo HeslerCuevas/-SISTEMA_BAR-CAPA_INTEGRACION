@@ -48,7 +48,7 @@ async def get_ventas_hoy(db: Session = Depends(get_session)) -> Dict[str, Any]:
 
 @router.get("/top-productos-vendidos")
 async def get_top_productos_vendidos(db: Session = Depends(get_session)) -> Dict[str, Any]:
-    reporte_core = await core_client.get("/api/v1/reportes/top-productos-vendidos")
+    reporte_core = await core_client.get("/reportes/top-productos-vendidos")
 
     if reporte_core:
         return {"origen": "CORE", "data": reporte_core}
@@ -75,7 +75,7 @@ async def get_top_productos_vendidos(db: Session = Depends(get_session)) -> Dict
 
 @router.get("/productos-stock-bajo")
 async def get_productos_stock_bajo(db: Session = Depends(get_session)) -> Dict[str, Any]:
-    reporte_core = await core_client.get("/api/v1/reportes/productos-stock-bajo")
+    reporte_core = await core_client.get("/reportes/productos-stock-bajo")
 
     if reporte_core:
         return {"origen": "CORE", "data": reporte_core}
