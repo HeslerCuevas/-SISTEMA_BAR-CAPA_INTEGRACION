@@ -59,7 +59,7 @@ class Empleado(SQLModel, table=True):
     nombre_completo: str = Field(sa_column=Column("NombreCompleto", String(150), nullable=False))
     password_hash: str = Field(sa_column=Column("PasswordHash", String(255), nullable=False))
     activo: bool = Field(default=True, sa_column=Column("Activo", Boolean, server_default=text("1"), nullable=False))
-
+    gmail: Optional[str] = Field(default=None, sa_column=Column("Gmail", String(150)))
     rol: Rol = Relationship(back_populates="empleados")
     sucursal: Sucursal = Relationship(back_populates="empleados")
     pedidos_offline: List["PedidoOffline"] = Relationship(back_populates="empleado")

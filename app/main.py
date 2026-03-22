@@ -1,11 +1,15 @@
 import uvicorn
-from fastapi import FastAPI
+import traceback
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import SQLModel
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.loggin_middleware import AuditLoggingMiddleware
 from app.db.database import engine
-from app.api.routers import auth
+from sqlmodel import SQLModel, Session
+from app.api.routers import auth, productos, pedidos, empleados, inventario, reportes
+from app.services.sync_service import procesar_pedidos_pendientes
 
 app = FastAPI(
     title="BAR INTEGRATION GATEWAY",
@@ -20,27 +24,65 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 app.add_middleware(AuditLoggingMiddleware)
+
+scheduler = AsyncIOScheduler()
+
+
+async def tarea_sincronizacion_programada():
+    print("[SCHEDULER] Revisando pedidos offline pendientes...")
+    with Session(engine) as session:
+        exitosos, fallidos = await procesar_pedidos_pendientes(session)
+        if exitosos > 0 or fallidos > 0:
+            print(f"[SCHEDULER] Resultado: {exitosos} subidos, {fallidos} fallidos.")
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    print(f"[ERROR GLOBAL CRÍTICO] Fallo en la ruta {request.url.path}")
+    traceback.print_exc()
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "mensaje": "El Gateway experimentó un fallo interno inesperado.",
+            "detalle": str(exc)
+        }
+    )
 
 @app.on_event("startup")
 def on_startup():
     print("Iniciando Gateway...")
-    print("Verificando/Creando esquemas en SQL Server (Integration_Gateway_DB)...")
+    print("Verificando/Creando esquemas en SQL Server...")
     SQLModel.metadata.create_all(engine)
-    print("Base de datos lista.")
 
+    print("Iniciando programador de tareas (Background Scheduler)...")
+    scheduler.add_job(tarea_sincronizacion_programada, 'interval', minutes=5)
+    scheduler.start()
+
+    print("Sistema listo y protegido.")
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    scheduler.shutdown()
 
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(productos.router, prefix="/api/v1")
+app.include_router(pedidos.router, prefix="/api/v1")
+app.include_router(empleados.router, prefix="/api/v1")
+app.include_router(inventario.router, prefix="/api/v1")
+app.include_router(reportes.router, prefix="/api/v1")
 
 @app.get("/", tags=["Estado del Sistema"])
 async def root():
     return {
         "status": "Gateway Online",
         "mode": "Resilient",
-        "message": "Capa de Integración activa y esperando conexiones."
+        "scheduler": "Activo"
     }
 
+
 if __name__ == "__main__":
-    # Usamos el puerto 8001 para no chocar con el CORE que usa el 8000
     uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
