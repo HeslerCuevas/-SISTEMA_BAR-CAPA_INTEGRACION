@@ -5,29 +5,23 @@ from app.db.database import get_session
 from app.api.deps import get_current_user_payload
 from app.services.cache_service import sincronizar_personal_desde_core
 
-router = APIRouter(prefix="/empleados", tags=["Gestión de Personal"])
+router = APIRouter(prefix="/empleados", tags=["Gestion de Personal"])
 
 @router.post("/sincronizar")
 async def forzar_sincronizacion_personal(
     db: Session = Depends(get_session),
     usuario_actual: dict = Depends(get_current_user_payload)
 ):
-    """
-    Endpoint manual para descargar los empleados más recientes desde el CORE
-    y guardarlos en la Caché local de SQL Server.
-    """
-    # Validación de seguridad: Asegurarnos de que quien pide esto tiene permisos
     if usuario_actual.get("canal") != "CAJA":
         raise HTTPException(
             status_code=403,
             detail="Operación denegada. Solo terminales de caja pueden sincronizar catálogos."
         )
 
-    # Llamamos a la lógica pesada que está en el Cache Service
     resultado = await sincronizar_personal_desde_core(db)
 
     if resultado["status"] == "error":
-        # Si el CORE está apagado, devolvemos un 503 Service Unavailable
+        # CORE APAGADO, devolvemos un 503 Service Unavailable
         raise HTTPException(status_code=503, detail=resultado["mensaje"])
 
     return resultado

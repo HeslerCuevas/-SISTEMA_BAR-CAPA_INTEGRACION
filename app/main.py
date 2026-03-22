@@ -9,7 +9,7 @@ from app.core.loggin_middleware import AuditLoggingMiddleware
 from app.db.database import engine
 from sqlmodel import SQLModel, Session
 from app.api.routers import auth, productos, pedidos, empleados, inventario, reportes
-from app.services.sync_service import procesar_pedidos_pendientes
+from app.services.sync_service import procesar_pedidos_pendientes, procesar_movimientos_pendientes
 
 app = FastAPI(
     title="BAR INTEGRATION GATEWAY",
@@ -30,11 +30,17 @@ scheduler = AsyncIOScheduler()
 
 
 async def tarea_sincronizacion_programada():
-    print("[SCHEDULER] Revisando pedidos offline pendientes...")
+    print("[SCHEDULER] Despertando: Revisando bandejas de salida offline...")
     with Session(engine) as session:
-        exitosos, fallidos = await procesar_pedidos_pendientes(session)
-        if exitosos > 0 or fallidos > 0:
-            print(f"[SCHEDULER] Resultado: {exitosos} subidos, {fallidos} fallidos.")
+
+        pedidos_ok, pedidos_fail = await procesar_pedidos_pendientes(session)
+
+        mov_ok, mov_fail = await procesar_movimientos_pendientes(session)
+
+        if pedidos_ok > 0 or pedidos_fail > 0 or mov_ok > 0 or mov_fail > 0:
+            print(f"[SCHEDULER] Reporte de Sincronización:")
+            print(f"Pedidos: {pedidos_ok} subidos, {pedidos_fail} fallidos.")
+            print(f"Movimientos: {mov_ok} subidos, {mov_fail} fallidos.")
 
 
 @app.exception_handler(Exception)

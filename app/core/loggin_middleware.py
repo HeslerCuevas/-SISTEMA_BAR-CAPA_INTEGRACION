@@ -17,7 +17,6 @@ class AuditLoggingMiddleware(BaseHTTPMiddleware):
 
         process_time = int((time.time() - start_time) * 1000)
 
-        # Capturar el cuerpo de la respuesta de forma segura
         response_body = b""
         async for chunk in response.body_iterator:
             response_body += chunk

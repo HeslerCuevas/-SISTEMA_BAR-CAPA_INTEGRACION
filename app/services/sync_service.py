@@ -2,7 +2,7 @@ import logging
 from sqlmodel import Session, select
 from typing import Tuple
 
-from app.models.integration_models import PedidoOffline, DetallePedidoOffline
+from app.models.integration_models import PedidoOffline, DetallePedidoOffline, MovimientoOffline
 from app.clients.core_client import core_client
 
 logger = logging.getLogger("SyncService")
@@ -22,7 +22,6 @@ async def procesar_pedidos_pendientes(db: Session) -> Tuple[int, int]:
 
     for pedido in pedidos_pendientes:
         try:
-            # Reconstruir el JSON del pedido con sus detalles
             detalles_stmt = select(DetallePedidoOffline).where(DetallePedidoOffline.factura_local_uuid == pedido.factura_local_uuid)
             detalles = db.exec(detalles_stmt).all()
 
@@ -48,10 +47,8 @@ async def procesar_pedidos_pendientes(db: Session) -> Tuple[int, int]:
                 ]
             }
 
-            # Enviar al CORE
             respuesta = await core_client.post("/pedidos/", data=payload_core)
 
-            # 4. Actualizar estado según la respuesta
             if respuesta:
                 pedido.estado_sincronizacion = "COMPLETADO"
                 pedido.ultimo_error = None
@@ -63,7 +60,6 @@ async def procesar_pedidos_pendientes(db: Session) -> Tuple[int, int]:
                 fallidos += 1
                 logger.warning(f"Fallo sync de {pedido.factura_local_uuid}. Intento {pedido.intentos_sincronizacion}")
 
-            # Guardamos el cambio de estado de este pedido
             db.add(pedido)
             db.commit()
 
@@ -75,4 +71,37 @@ async def procesar_pedidos_pendientes(db: Session) -> Tuple[int, int]:
             db.commit()
             fallidos += 1
 
+    return exitosos, fallidos
+
+
+async def procesar_movimientos_pendientes(session: Session):
+    statement = select(MovimientoOffline).where(MovimientoOffline.estado_sync == "PENDIENTE")
+    movimientos_pendientes = session.exec(statement).all()
+
+    if not movimientos_pendientes:
+        return 0, 0
+
+    exitosos = 0
+    fallidos = 0
+
+    for mov in movimientos_pendientes:
+        payload_core = {
+            "movimiento_local_uuid": str(mov.id),
+            "producto_id": mov.producto_id,
+            "empleado_id": mov.empleado_id,
+            "tipo_movimiento": mov.tipo_movimiento,
+            "cantidad": mov.cantidad,
+            "motivo": mov.motivo
+        }
+
+        respuesta = await core_client.post("/inventario/movimiento", data=payload_core)
+
+        if respuesta:
+            mov.estado_sync = "COMPLETADO"
+            session.add(mov)
+            exitosos += 1
+        else:
+            fallidos += 1
+
+    session.commit()
     return exitosos, fallidos

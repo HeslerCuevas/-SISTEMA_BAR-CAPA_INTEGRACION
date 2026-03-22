@@ -30,7 +30,6 @@ class Rol(SQLModel, table=True):
     __tablename__ = "Roles"
     __table_args__ = {"schema": "Cache"}
 
-    # autoincrement=False porque el ID viene del CORE
     id: int = Field(sa_column=Column("Id", Integer, primary_key=True, autoincrement=False))
     nombre: str = Field(sa_column=Column("Nombre", String(50), nullable=False))
 
@@ -142,7 +141,6 @@ class InventarioLocal(SQLModel, table=True):
     __tablename__ = "Inventario_Local"
     __table_args__ = {"schema": "Cache"}
 
-    # Llave primaria compuesta
     producto_id: int = Field(
         sa_column=Column("ProductoId", Integer, ForeignKey("Cache.Productos.Id"), primary_key=True))
     sucursal_id: int = Field(
@@ -210,3 +208,38 @@ class DetallePedidoOffline(SQLModel, table=True):
 
     pedido: PedidoOffline = Relationship(back_populates="detalles")
     producto: Producto = Relationship(back_populates="detalles_pedido")
+
+
+class MovimientoOffline(SQLModel, table=True):
+    __tablename__ = "Movimientos_Offline"
+    __table_args__ = {"schema": "Sync"}
+
+    id: uuid.UUID = Field(
+        default_factory=uuid.uuid4,
+        sa_column=Column("Id", UNIQUEIDENTIFIER, primary_key=True)
+    )
+
+    empleado_id: int = Field(
+        sa_column=Column("EmpleadoId", Integer, ForeignKey("Cache.Empleados.Id"), nullable=False)
+    )
+
+    producto_id: int = Field(
+        sa_column=Column("ProductoId", Integer, ForeignKey("Cache.Productos.Id"), nullable=False)
+    )
+
+    tipo_movimiento: str = Field(sa_column=Column("TipoMovimiento", String(20), nullable=False))
+    cantidad: int = Field(sa_column=Column("Cantidad", Integer, nullable=False))
+    motivo: str = Field(sa_column=Column("Motivo", String(255), nullable=False))
+
+    estado_sincronizacion: str = Field(
+        default="PENDIENTE",
+        sa_column=Column("EstadoSincronizacion", String(20), server_default=text("'PENDIENTE'"), nullable=False)
+    )
+
+    fecha_creacion_local: datetime = Field(
+        default_factory=datetime.now,
+        sa_column=Column("FechaCreacionLocal", DateTime, server_default=text("SYSDATETIME()"), nullable=False)
+    )
+
+    empleado: Optional[Empleado] = Relationship()
+    producto: Optional[Producto] = Relationship()
