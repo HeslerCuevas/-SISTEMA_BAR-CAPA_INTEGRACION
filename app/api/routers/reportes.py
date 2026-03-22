@@ -15,7 +15,7 @@ router = APIRouter(prefix="/reportes", tags=["Reportes y Dashboards"])
 
 @router.get("/ventas-hoy")
 async def get_ventas_hoy(db: Session = Depends(get_session)) -> Dict[str, Any]:
-    reporte_core = await core_client.get("/api/v1/reportes/ventas-hoy")
+    reporte_core = await core_client.get("/reportes/ventas-hoy")
 
     if reporte_core:
         reporte_core["origen"] = "CORE"

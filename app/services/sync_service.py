@@ -75,7 +75,7 @@ async def procesar_pedidos_pendientes(db: Session) -> Tuple[int, int]:
 
 
 async def procesar_movimientos_pendientes(session: Session):
-    statement = select(MovimientoOffline).where(MovimientoOffline.estado_sync == "PENDIENTE")
+    statement = select(MovimientoOffline).where(MovimientoOffline.estado_sincronizacion == "PENDIENTE")
     movimientos_pendientes = session.exec(statement).all()
 
     if not movimientos_pendientes:

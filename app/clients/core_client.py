@@ -12,16 +12,22 @@ class CoreClient:
     def __init__(self):
         self.base_url = settings.CORE_URL
         self.gateway_token = settings.CORE_SECRET_KEY
-        self.timeout = httpx.Timeout(5.0, connect=2.0)
+        self.timeout = httpx.Timeout(10.0, connect=5.0)
+
+    def _get_headers(self, extra_headers: Optional[Dict] = None) -> Dict[str, str]:
+        headers = {"X-Gateway-Token": self.gateway_token}
+        if extra_headers:
+            headers.update(extra_headers)
+        return headers
 
     async def get(self, endpoint: str, headers: Optional[Dict] = None, params: Optional[Dict] = None) -> Optional[Any]:
         url = f"{self.base_url}{endpoint}"
 
-        headers = {"X-Gateway-Token": self.gateway_token}
+        final_headers = self._get_headers(headers)
 
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             try:
-                response = await client.get(url, headers=headers, params=params)
+                response = await client.get(url, headers=final_headers, params=params)
 
                 if response.status_code == 422:
                     logger.error(f"[DEBUG 422] El CORE rechazó los datos. Detalle: {response.json()}")
@@ -47,9 +53,11 @@ class CoreClient:
         Dict[str, Any]]:
         url = f"{self.base_url}{endpoint}"
 
+        final_headers = self._get_headers(headers)
+
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             try:
-                response = await client.post(url, json=data, headers=headers)
+                response = await client.post(url, json=data, headers=final_headers)
 
                 if response.status_code == 422:
                     logger.error(f"[DEBUG 422] El CORE rechazó el POST. Detalle: {response.json()}")
