@@ -16,27 +16,48 @@ router = APIRouter(prefix="/productos", tags=["Catálogo de Productos"])
 def sincronizar_cache_productos(core_data: list):
     with Session(engine) as db_background:
         try:
+            nuevos = 0
             actualizados = 0
+
             for item in core_data:
                 prod_local = db_background.exec(
                     select(Producto).where(Producto.id == item.get("id"))
                 ).first()
 
                 if prod_local:
+                    prod_local.sku = item.get("sku")
                     prod_local.nombre = item.get("nombre")
                     prod_local.precio_base = item.get("precio_base")
+                    prod_local.es_inventariable = item.get("es_inventariable", True)
 
-                    prod_local.activo = item.get("activo", prod_local.activo)
+                    if hasattr(prod_local, "activo"):
+                        prod_local.activo = item.get("activo", True)
 
                     db_background.add(prod_local)
                     actualizados += 1
 
+                else:
+                    nuevo_prod = Producto(
+                        id=item.get("id"),
+                        categoria_id=item.get("categoria_id", 1),
+                        impuesto_id=item.get("impuesto_id", 1),
+                        sku=item.get("sku", "N/A"),
+                        nombre=item.get("nombre"),
+                        precio_base=item.get("precio_base"),
+                        es_inventariable=item.get("es_inventariable", True),
+                    )
+
+                    if hasattr(nuevo_prod, "activo"):
+                        nuevo_prod.activo = item.get("activo", True)
+
+                    db_background.add(nuevo_prod)
+                    nuevos += 1
+
             db_background.commit()
-            if actualizados > 0:
-                logger.info(f"[CACHE REFRESH] Se actualizaron {actualizados} productos localmente.")
+            logger.info(f"[CACHE REFRESH] Sincronización exitosa: {nuevos} insertados, {actualizados} actualizados.")
 
         except Exception as e:
-            logger.error(f"[ERROR CACHE] Falló la actualización en segundo plano: {str(e)}")
+            logger.error(f"[ERROR CACHE] Falló la sincronización en segundo plano: {str(e)}")
             db_background.rollback()
 
 
