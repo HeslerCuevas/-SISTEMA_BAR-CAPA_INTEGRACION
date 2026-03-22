@@ -39,7 +39,7 @@ async def tarea_sincronizacion_programada():
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    print(f"[ERROR GLOBAL CRÍTICO] Fallo en la ruta {request.url.path}")
+    print(f"[ERROR GLOBAL CRITICO] Fallo en la ruta {request.url.path}")
     traceback.print_exc()
 
     return JSONResponse(
@@ -58,7 +58,7 @@ def on_startup():
     SQLModel.metadata.create_all(engine)
 
     print("Iniciando programador de tareas (Background Scheduler)...")
-    scheduler.add_job(tarea_sincronizacion_programada, 'interval', minutes=5)
+    scheduler.add_job(tarea_sincronizacion_programada, 'interval', minutes=2)
     scheduler.start()
 
     print("Sistema listo y protegido.")
