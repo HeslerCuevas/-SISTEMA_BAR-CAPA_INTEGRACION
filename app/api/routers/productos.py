@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Response, BackgroundTasks
 from sqlmodel import Session, select
 from typing import List
 import logging
 
-from app.db.database import get_session
+from app.db.database import get_session, engine
 from app.clients.core_client import core_client
 from app.models.integration_models import Producto
 from app.schemas.auth_schemas import ProductoResponse
@@ -13,33 +13,48 @@ logger = logging.getLogger("RouterProductos")
 router = APIRouter(prefix="/productos", tags=["Catálogo de Productos"])
 
 
+def sincronizar_cache_productos(core_data: list):
+    with Session(engine) as db_background:
+        try:
+            actualizados = 0
+            for item in core_data:
+                prod_local = db_background.exec(
+                    select(Producto).where(Producto.id == item.get("id"))
+                ).first()
+
+                if prod_local:
+                    prod_local.nombre = item.get("nombre")
+                    prod_local.precio_base = item.get("precio_base")
+
+                    prod_local.activo = item.get("activo", prod_local.activo)
+
+                    db_background.add(prod_local)
+                    actualizados += 1
+
+            db_background.commit()
+            if actualizados > 0:
+                logger.info(f"[CACHE REFRESH] Se actualizaron {actualizados} productos localmente.")
+
+        except Exception as e:
+            logger.error(f"[ERROR CACHE] Falló la actualización en segundo plano: {str(e)}")
+            db_background.rollback()
+
+
 @router.get("/", response_model=List[ProductoResponse])
 async def obtener_catalogo(
         response: Response,
+        background_tasks: BackgroundTasks,
         db: Session = Depends(get_session),
-        # Esta línea exige que el usuario envíe un JWT válido para ver los productos
         usuario_actual: dict = Depends(get_current_user_payload)
 ):
-    """
-    Obtiene el catálogo de productos con Resiliencia Activa.
-    Si el CORE falla, hace "Fallback" a la Caché Local de SQL Server.
-    """
     logger.info(f"Usuario {usuario_actual.get('sub')} solicitando catálogo desde {usuario_actual.get('canal')}")
 
-    # 1. INTENTAR HABLAR CON EL CORE
-    # (Asumimos que el CORE tiene un endpoint GET /productos)
     core_data = await core_client.get("/productos/")
 
-    # 2. EVALUAR LA RESPUESTA
     if core_data is not None:
-        # ==========================================
-        # ESCENARIO A: EL CORE ESTÁ ONLINE
-        # ==========================================
         response.headers["X-Data-Source"] = "CORE"
 
-        # OJO INGENIERO: En un entorno de producción 100% real, aquí llamarías a un
-        # servicio como `cache_service.sincronizar(core_data)` para actualizar
-        # tu tabla SQL Server local con los precios más nuevos.
+        background_tasks.add_task(sincronizar_cache_productos, core_data)
 
         resultados = []
         for item in core_data:
@@ -49,19 +64,15 @@ async def obtener_catalogo(
                     nombre=item.get("nombre"),
                     precio_base=item.get("precio_base"),
                     cantidad_disponible=item.get("cantidad_disponible", 0),
-                    origen_datos="CORE"  # Le avisamos al frontend de dónde vino
+                    origen_datos="CORE"
                 )
             )
         return resultados
 
     else:
-        # ==========================================
-        # ESCENARIO B: EL CORE ESTÁ OFFLINE (FALLBACK)
-        # ==========================================
         response.headers["X-Data-Source"] = "CACHE_LOCAL"
-        logger.warning("Activando lectura de contingencia desde SQL Server Local.")
+        logger.warning("[FALLBACK] CORE inaccesible. Sirviendo catálogo desde SQL Server Local.")
 
-        # Hacemos la consulta a la base de datos local (Integration_Gateway_DB)
         statement = select(Producto).where(Producto.activo == True)
         productos_locales = db.exec(statement).all()
 
@@ -72,8 +83,8 @@ async def obtener_catalogo(
                     id=prod.id,
                     nombre=prod.nombre,
                     precio_base=float(prod.precio_base),
-                    cantidad_disponible=99,  # Un valor por defecto para contingencia
-                    origen_datos="CACHE_LOCAL"  # El frontend sabrá que está en modo offline
+                    cantidad_disponible=99,  # Al no tener el CORE, asumimos stock para no bloquear ventas
+                    origen_datos="CACHE_LOCAL"
                 )
             )
         return resultados

@@ -1,9 +1,7 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
-from sqlmodel import Session
-from app.db.database import get_session
-from app.core.security import SECRET_KEY, ALGORITHM
+from app.core.config import settings
 from typing import Dict, Any
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
@@ -17,7 +15,7 @@ def get_current_user_payload(token: str = Depends(oauth2_scheme)) -> Dict[str, A
     )
 
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         usuario_id: str = payload.get("sub")
         canal: str = payload.get("canal")
 
