@@ -179,7 +179,7 @@ async def cancelar_pedido(
     empleado_id = usuario.get("sub")
     try:
         respuesta_core = await core_client.post(
-            f"/api/v1/pedidos/{factura_local_uuid}/cancelar",
+            f"/pedidos/{factura_local_uuid}/cancelar",
             data={"empleado_id": empleado_id, "motivo": "Cancelación desde Capa de Integracion"}
         )
 
