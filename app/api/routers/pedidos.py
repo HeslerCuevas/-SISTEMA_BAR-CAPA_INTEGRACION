@@ -167,27 +167,32 @@ async def cancelar_pedido(
     pedido = db.exec(select(PedidoOffline).where(PedidoOffline.factura_local_uuid == factura_local_uuid)).first()
 
     if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado en el Gateway.")
+        raise HTTPException(status_code=404, detail="Pedido no encontrado en la Capa de Integracion.")
 
-    if pedido.estado == "CANCELADO":
-        return {"mensaje": "El pedido ya estaba cancelado."}
+    if pedido.estado_sincronizacion == "CANCELADO":
+        return {"mensaje": "El pedido ya estaba cancelado localmente."}
 
-    pedido.estado = "CANCELADO"
-    pedido.estado_sincronizacion = "PENDIENTE"
-
+    pedido.estado_sincronizacion = "CANCELADO"
     db.add(pedido)
     db.commit()
 
     empleado_id = usuario.get("sub")
-    respuesta_core = await core_client.post(
-        f"/pedidos/{factura_local_uuid}/cancelar",
-        data={"empleado_id": empleado_id}
-    )
+    try:
+        respuesta_core = await core_client.post(
+            f"/api/v1/pedidos/{factura_local_uuid}/cancelar",
+            data={"empleado_id": empleado_id, "motivo": "Cancelación desde Capa de Integracion"}
+        )
 
-    if respuesta_core:
-        pedido.estado_sincronizacion = "COMPLETADO"
-        db.add(pedido)
-        db.commit()
-        return {"mensaje": f"Pedido {factura_local_uuid} cancelado con éxito.", "core_notificado": True}
+        if respuesta_core:
+            pedido.estado_sincronizacion = "COMPLETADO"
+            db.add(pedido)
+            db.commit()
+            return {"mensaje": f"Pedido {factura_local_uuid} cancelado en local y sincronizado con CORE."}
 
-    return {"mensaje": "Pedido cancelado localmente. CORE offline.", "core_notificado": False}
+    except Exception as e:
+        logger.error(f"Error notificando cancelación al CORE: {e}")
+
+    return {
+        "mensaje": "Pedido cancelado localmente. El CORE no respondió, se reintentará la sincronización.",
+        "core_notificado": False
+    }
