@@ -28,7 +28,7 @@ async def consultar_stock(
     if stock_core:
         return {
             "producto_id": producto_id,
-            "stock": stock_core.get("stock", 0),
+            "stock": stock_core.get("cantidad_disponible", 0),
             "fuente": "CORE"
         }
 
