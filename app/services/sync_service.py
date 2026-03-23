@@ -97,7 +97,7 @@ async def procesar_movimientos_pendientes(session: Session):
         respuesta = await core_client.post("/inventario/movimiento", data=payload_core)
 
         if respuesta:
-            mov.estado_sync = "COMPLETADO"
+            mov.estado_sincronizacion = "COMPLETADO"
             session.add(mov)
             exitosos += 1
         else:

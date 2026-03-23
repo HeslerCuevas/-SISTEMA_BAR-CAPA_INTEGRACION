@@ -104,7 +104,7 @@ async def registrar_movimiento(
             "tipo_movimiento": movimiento.tipo_movimiento,
             "cantidad": movimiento.cantidad,
             "motivo": movimiento.motivo,
-            "factura_local_uuid": str(nuevo_movimiento.id)
+            "movimiento_local_uuid": str(nuevo_movimiento.id)
         }
 
         respuesta_core = await core_client.post("/inventario/movimiento", data=payload_core)
