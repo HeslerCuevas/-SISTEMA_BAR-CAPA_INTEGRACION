@@ -15,17 +15,24 @@ router = APIRouter(prefix="/pedidos", tags=["Ventas y Pedidos"])
 
 
 async def intentar_sincronizar_pedido(pedido_uuid: uuid.UUID, data_pedido: dict):
-    logger.info(f"[BACKGROUND] Intentando subir pedido {pedido_uuid} al CORE...")
+    from app.db.database import engine
 
     payload_core = data_pedido.copy()
-    payload_core["integracion_uuid"] = str(pedido_uuid)
+    payload_core["factura_local_uuid"] = str(pedido_uuid)
 
     respuesta = await core_client.post("/pedidos/", data=payload_core)
 
-    if respuesta:
-        logger.info(f"[BACKGROUND] Pedido {pedido_uuid} sincronizado con éxito.")
-    else:
-        logger.warning(f"[BACKGROUND] CORE inalcanzable. Pedido {pedido_uuid} encolado para reintento.")
+    with Session(engine) as session:
+        pedido = session.get(PedidoOffline, pedido_uuid)
+        if respuesta and pedido:
+            pedido.estado_sincronizacion = "COMPLETADO"
+            session.add(pedido)
+            session.commit()
+            logger.info(f"[IMMEDIATE-SYNC] Pedido {pedido_uuid} marcado como COMPLETADO.")
+        elif pedido:
+            pedido.ultimo_error = "CORE inalcanzable en intento inmediato."
+            session.add(pedido)
+            session.commit()
 
 
 @router.post("/", response_model=PedidoResponse, status_code=201)
@@ -73,7 +80,12 @@ async def crear_pedido(
         logger.critical(f"Error guardando pedido localmente: {e}")
         raise HTTPException(status_code=500, detail="Error crítico guardando la orden localmente.")
 
-    background_tasks.add_task(intentar_sincronizar_pedido, nuevo_uuid, request.model_dump())
+    datos_para_core = request.model_dump()
+    datos_para_core["canal_origen"] = nuevo_pedido.canal_origen
+    datos_para_core["empleado_id"] = nuevo_pedido.empleado_id
+    datos_para_core["cliente_id"] = nuevo_pedido.cliente_id
+
+    background_tasks.add_task(intentar_sincronizar_pedido, nuevo_uuid, datos_para_core)
 
     return PedidoResponse(
         mensaje="Pedido registrado correctamente en el Gateway.",
