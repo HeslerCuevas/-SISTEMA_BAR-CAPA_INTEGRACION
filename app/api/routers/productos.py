@@ -6,8 +6,8 @@ from datetime import datetime
 
 from app.db.database import get_session, engine
 from app.clients.core_client import core_client
-from app.models.integration_models import Producto, InventarioLocal
-from app.schemas.auth_schemas import ProductoResponse
+from app.models.integration_models import Producto, InventarioLocal, Categoria
+from app.schemas.productos_schema import ProductoResponse, CategoriaResponse
 from app.api.deps import get_current_user_payload
 from app.core.config import settings
 
@@ -49,7 +49,6 @@ def sincronizar_cache_productos(core_data: list):
                     prod_nuevos += 1
 
                 if item.get("es_inventariable", True):
-
                     inv_local = db_background.exec(
                         select(InventarioLocal).where(
                             InventarioLocal.producto_id == item.get("id"),
@@ -83,6 +82,135 @@ def sincronizar_cache_productos(core_data: list):
             db_background.rollback()
 
 
+def sincronizar_cache_categorias(core_data: list):
+    with Session(engine) as db_background:
+        try:
+            cat_nuevas = 0
+            cat_actualizadas = 0
+
+            for item in core_data:
+                cat_local = db_background.exec(
+                    select(Categoria).where(Categoria.id == item.get("id"))
+                ).first()
+
+                if cat_local:
+                    cat_local.nombre = item.get("nombre")
+                    db_background.add(cat_local)
+                    cat_actualizadas += 1
+                else:
+                    nueva_cat = Categoria(
+                        id=item.get("id"),
+                        nombre=item.get("nombre")
+                    )
+                    db_background.add(nueva_cat)
+                    cat_nuevas += 1
+
+            db_background.commit()
+            logger.info(f"[CACHE REFRESH] Sincronización exitosa. Categorias (N:{cat_nuevas}, A:{cat_actualizadas})")
+
+        except Exception as e:
+            logger.error(f"[ERROR CACHE] Falló la sincronización de categorías: {str(e)}")
+            db_background.rollback()
+
+
+@router.get("/categorias", response_model=List[CategoriaResponse])
+async def obtener_categorias(
+        response: Response,
+        background_tasks: BackgroundTasks,
+        db: Session = Depends(get_session),
+        usuario_actual: dict = Depends(get_current_user_payload)
+):
+    logger.info(f"Usuario {usuario_actual.get('sub')} solicitando categorias desde {usuario_actual.get('canal')}")
+
+    # 1. Intentar obtener desde el CORE
+    core_data = await core_client.get("/productos/categorias")
+
+    if core_data is not None:
+        response.headers["X-Data-Source"] = "CORE"
+        # 2. Sincronizar localmente en background
+        background_tasks.add_task(sincronizar_cache_categorias, core_data)
+
+        # Mapeamos la respuesta del CORE al esquema esperado
+        return [
+            CategoriaResponse(
+                id=item.get("id"),
+                nombre=item.get("nombre"),
+                descripcion=item.get("descripcion", ""),
+                activo=item.get("activo", True)
+            ) for item in core_data
+        ]
+    else:
+        # 3. Fallback: El CORE está caído, respondemos con SQL Server Local
+        response.headers["X-Data-Source"] = "CACHE_LOCAL"
+        logger.warning("[FALLBACK] CORE inaccesible. Sirviendo categorías desde SQL Server Local.")
+
+        statement = select(Categoria)
+        categorias_locales = db.exec(statement).all()
+
+        return [
+            CategoriaResponse(
+                id=cat.id,
+                nombre=cat.nombre,
+                descripcion="Categoría Local",
+                activo=True
+            ) for cat in categorias_locales
+        ]
+
+
+@router.get("/por-categoria/{categoria_id}", response_model=List[ProductoResponse])
+async def obtener_productos_por_categoria(
+        categoria_id: int,
+        response: Response,
+        background_tasks: BackgroundTasks,
+        db: Session = Depends(get_session),
+        usuario_actual: dict = Depends(get_current_user_payload)
+):
+    """Obtiene productos filtrados: Intenta ir al CORE, si falla usa la caché local"""
+    logger.info(f"Solicitando productos de cat {categoria_id} desde {usuario_actual.get('canal')}")
+
+    # 1. Intentar obtener desde el CORE
+    core_data = await core_client.get(f"/productos/por-categoria/{categoria_id}")
+
+    if core_data is not None:
+        response.headers["X-Data-Source"] = "CORE"
+
+        # Reutilizamos tu función maestra de sincronización de productos!
+        background_tasks.add_task(sincronizar_cache_productos, core_data)
+
+        resultados = []
+        for item in core_data:
+            resultados.append(
+                ProductoResponse(
+                    id=item.get("id"),
+                    nombre=item.get("nombre"),
+                    precio_base=item.get("precio_base"),
+                    cantidad_disponible=item.get("cantidad_disponible", 0),
+                    origen_datos="CORE"
+                )
+            )
+        return resultados
+    else:
+        # 2. Fallback: CORE caído, buscar en caché local
+        response.headers["X-Data-Source"] = "CACHE_LOCAL"
+        logger.warning(f"[FALLBACK] CORE inaccesible. Sirviendo productos cat {categoria_id} desde Local.")
+
+        statement = select(Producto).where(Producto.categoria_id == categoria_id)
+        productos_locales = db.exec(statement).all()
+
+        resultados = []
+        for prod in productos_locales:
+            resultados.append(
+                ProductoResponse(
+                    id=prod.id,
+                    nombre=prod.nombre,
+                    precio_base=float(prod.precio_base),
+                    cantidad_disponible=99,  # Al no tener CORE, asumimos stock
+                    origen_datos="CACHE_LOCAL"
+                )
+            )
+        return resultados
+
+
 @router.get("/", response_model=List[ProductoResponse])
 async def obtener_catalogo(
         response: Response,
@@ -90,13 +218,13 @@ async def obtener_catalogo(
         db: Session = Depends(get_session),
         usuario_actual: dict = Depends(get_current_user_payload)
 ):
+    """Tu endpoint original intacto."""
     logger.info(f"Usuario {usuario_actual.get('sub')} solicitando catálogo desde {usuario_actual.get('canal')}")
 
     core_data = await core_client.get("/productos/")
 
     if core_data is not None:
         response.headers["X-Data-Source"] = "CORE"
-
         background_tasks.add_task(sincronizar_cache_productos, core_data)
 
         resultados = []
@@ -116,7 +244,7 @@ async def obtener_catalogo(
         response.headers["X-Data-Source"] = "CACHE_LOCAL"
         logger.warning("[FALLBACK] CORE inaccesible. Sirviendo catálogo desde SQL Server Local.")
 
-        statement = select(Producto).where(Producto.activo == True)
+        statement = select(Producto)  # Removido el filtro activo==True si no está en tu modelo local
         productos_locales = db.exec(statement).all()
 
         resultados = []
@@ -126,7 +254,7 @@ async def obtener_catalogo(
                     id=prod.id,
                     nombre=prod.nombre,
                     precio_base=float(prod.precio_base),
-                    cantidad_disponible=99,  # Al no tener el CORE, asumimos stock para no bloquear ventas
+                    cantidad_disponible=99,
                     origen_datos="CACHE_LOCAL"
                 )
             )

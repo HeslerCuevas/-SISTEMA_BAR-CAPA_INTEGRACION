@@ -8,7 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.core.loggin_middleware import AuditLoggingMiddleware
 from app.db.database import engine
 from sqlmodel import SQLModel, Session
-from app.api.routers import auth, productos, pedidos, empleados, inventario, reportes
+from app.api.routers import auth_empleados, productos, pedidos, empleados, inventario, reportes, auth_clientes
 from app.services.sync_service import procesar_pedidos_pendientes, procesar_movimientos_pendientes
 
 app = FastAPI(
@@ -74,11 +74,13 @@ def on_startup():
 def on_shutdown():
     scheduler.shutdown()
 
-app.include_router(auth.router, prefix="/api/v1")
+app.include_router(auth_empleados.router, prefix="/api/v1")
+app.include_router(auth_clientes.router, prefix="/api/v1")
 app.include_router(productos.router, prefix="/api/v1")
 app.include_router(pedidos.router, prefix="/api/v1")
 app.include_router(empleados.router, prefix="/api/v1")
 app.include_router(inventario.router, prefix="/api/v1")
+app.include_router(reportes.router, prefix="/api/v1")
 app.include_router(reportes.router, prefix="/api/v1")
 
 @app.get("/", tags=["Estado del Sistema"])
