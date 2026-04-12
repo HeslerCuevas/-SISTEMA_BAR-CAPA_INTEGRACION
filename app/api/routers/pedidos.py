@@ -69,18 +69,30 @@ async def crear_pedido(
         )
         db.add(nuevo_pedido)
 
+        # --- ARREGLO CRÍTICO: Sincronización de UUIDs de Detalles ---
+        detalles_para_core = []
+
         for det in request.detalles:
+            # 1. Determinamos el UUID (Prioridad: Flutter > Nuevo generado aquí)
+            d_uuid = det.detalle_local_uuid or uuid.uuid4()
+
+            # 2. Creamos el objeto para la DB local de Integración
             nuevo_detalle = DetallePedidoOffline(
-                detalle_local_uuid=uuid.uuid4(),
+                detalle_local_uuid=d_uuid,
                 factura_local_uuid=nuevo_uuid,
                 producto_id=det.producto_id,
                 cantidad=det.cantidad,
-                precio_unitario_historico=det.precio_unitario,  # Nombre exacto de tu SQL
+                precio_unitario_historico=det.precio_unitario,
                 impuesto_historico=18.0,
                 monto_impuesto=det.monto_impuesto,
                 subtotal_linea=det.subtotal_linea
             )
             db.add(nuevo_detalle)
+
+            # 3. Preparamos el ítem para el payload del CORE asegurando el UUID
+            item_json = det.model_dump(mode='json')  # mode='json' limpia Decimals/UUIDs
+            item_json["detalle_local_uuid"] = str(d_uuid)
+            detalles_para_core.append(item_json)
 
         db.commit()
         logger.info(f"✅ Pedido {nuevo_uuid} guardado en Sync.Pedidos_Offline.")
@@ -90,8 +102,14 @@ async def crear_pedido(
         logger.error(f"❌ Error DB local: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error interno en DB: {str(e)}")
 
+    # 3. Preparar sincronización al CORE (Background Task)
+    # Dump general en modo JSON para limpiar el resto de campos (Decimal, UUID cabecera)
     datos_para_core = request.model_dump(mode='json')
 
+    # Sobrescribimos la lista de detalles con la que YA TIENE los UUIDs inyectados
+    datos_para_core["detalles"] = detalles_para_core
+
+    # Inyectamos metadatos del usuario actual
     datos_para_core["canal_origen"] = canal
     datos_para_core["cliente_id"] = nuevo_pedido.cliente_id
     datos_para_core["empleado_id"] = nuevo_pedido.empleado_id
@@ -99,13 +117,14 @@ async def crear_pedido(
 
     background_tasks.add_task(intentar_sincronizar_pedido, nuevo_uuid, datos_para_core)
 
-    # 4. RETORNO (Asegúrate de que esta línea esté fuera del try/except)
+    # 4. RETORNO
     return PedidoResponse(
         mensaje="Pedido registrado correctamente en el Gateway.",
         factura_local_uuid=str(nuevo_uuid),
         estado_sincronizacion="PENDIENTE",
-        propina_extra = request.propina_extra
+        propina_extra=request.propina_extra
     )
+
 
 @router.post("/forzar-sincronizacion")
 async def forzar_sincronizacion_offline(

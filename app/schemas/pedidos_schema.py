@@ -8,6 +8,7 @@ class DetallePedidoRequest(BaseModel):
     precio_unitario: float
     monto_impuesto: float
     subtotal_linea: float
+    detalle_local_uuid: Optional[uuid.UUID] = None
 
 class PedidoRequest(BaseModel):
     factura_local_uuid: Optional[uuid.UUID] = None
