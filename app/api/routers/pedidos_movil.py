@@ -113,24 +113,32 @@ async def resumen_cuenta_local(factura_local_uuid: uuid.UUID, db: Session = Depe
 
 
 @router.post("/{factura_local_uuid}/solicitar-cuenta")
-async def solicitar_cuenta_gateway(factura_local_uuid: uuid.UUID, payload: SolicitarCuentaRequest,
-                                   db: Session = Depends(get_session)):
+async def solicitar_cuenta_gateway(
+    factura_local_uuid: uuid.UUID,
+    payload: SolicitarCuentaRequest,
+    db: Session = Depends(get_session)
+):
     pedido = db.exec(select(PedidoOffline).where(PedidoOffline.factura_local_uuid == factura_local_uuid)).first()
 
     if not pedido:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
 
-    # 1. Guardamos la propina extra
+    # 1. Guardamos localmente (SQLModel maneja Decimal bien, no hay problema aquí)
     pedido.propina_extra = payload.propina_extra
-
     pedido.total_general = pedido.subtotal + pedido.total_impuestos + pedido.propina_legal + pedido.propina_extra
-
     pedido.estado = "POR_FACTURAR"
 
     db.add(pedido)
     db.commit()
 
     # 2. Notificamos al CORE
-    await core_client.post(f"/pedidos/{factura_local_uuid}/solicitar-cuenta", data=payload.model_dump())
+    # --- CAMBIO AQUÍ: Añade mode='json' ---
+    payload_para_core = payload.model_dump(mode='json')
+    # --------------------------------------
+
+    await core_client.post(
+        f"/pedidos/{factura_local_uuid}/solicitar-cuenta",
+        data=payload_para_core
+    )
 
     return {"mensaje": "Cuenta solicitada con propina extra aplicada."}
