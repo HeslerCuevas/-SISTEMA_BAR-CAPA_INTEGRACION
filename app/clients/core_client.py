@@ -12,6 +12,7 @@ class CoreClient:
     def __init__(self):
         self.base_url = settings.CORE_URL
         self.gateway_token = settings.CORE_SECRET_KEY
+        # Timeout balanceado: 5s para conectar, 10s en total
         self.timeout = httpx.Timeout(10.0, connect=5.0)
 
     def _get_headers(self, extra_headers: Optional[Dict] = None) -> Dict[str, str]:
@@ -22,7 +23,6 @@ class CoreClient:
 
     async def get(self, endpoint: str, headers: Optional[Dict] = None, params: Optional[Dict] = None) -> Optional[Any]:
         url = f"{self.base_url}{endpoint}"
-
         final_headers = self._get_headers(headers)
 
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
@@ -30,7 +30,7 @@ class CoreClient:
                 response = await client.get(url, headers=final_headers, params=params)
 
                 if response.status_code == 422:
-                    logger.error(f"[DEBUG 422] El CORE rechazó los datos. Detalle: {response.json()}")
+                    logger.error(f"[DEBUG 422] El CORE rechazó los datos (GET). Detalle: {response.json()}")
                     return None
 
                 response.raise_for_status()
@@ -52,7 +52,6 @@ class CoreClient:
     async def post(self, endpoint: str, data: Dict[str, Any], headers: Optional[Dict] = None) -> Optional[
         Dict[str, Any]]:
         url = f"{self.base_url}{endpoint}"
-
         final_headers = self._get_headers(headers)
 
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
@@ -67,10 +66,98 @@ class CoreClient:
                 return response.json()
 
             except (httpx.ConnectError, httpx.ReadTimeout):
-                logger.warning(f"[OUTBOX PATTERN] CORE inalcanzable. El dato deberá guardarse en el búfer local.")
+                logger.warning(
+                    f"[OUTBOX PATTERN] CORE inalcanzable. El dato (POST) deberá guardarse en el búfer local.")
                 return None
             except httpx.HTTPStatusError as e:
                 logger.error(f"[ERROR CORE] POST a {url} falló con estado {e.response.status_code}: {e.response.text}")
+                return None
+            except Exception as e:
+                logger.critical(f"[ERROR CRÍTICO] Fallo inesperado en POST: {str(e)}")
+                return None
+
+    async def patch(self, endpoint: str, data: Dict[str, Any], headers: Optional[Dict] = None) -> Optional[
+        Dict[str, Any]]:
+        url = f"{self.base_url}{endpoint}"
+        final_headers = self._get_headers(headers)
+
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            try:
+                response = await client.patch(url, json=data, headers=final_headers)
+
+                if response.status_code == 422:
+                    logger.error(f"[DEBUG 422] El CORE rechazó el PATCH. Detalle: {response.json()}")
+                    return None
+
+                response.raise_for_status()
+                return response.json()
+
+            except (httpx.ConnectError, httpx.ReadTimeout):
+                logger.warning(
+                    f"[OUTBOX PATTERN] CORE inalcanzable. El dato (PATCH) deberá guardarse en el búfer local.")
+                return None
+            except httpx.HTTPStatusError as e:
+                logger.error(f"[ERROR CORE] PATCH a {url} falló con estado {e.response.status_code}: {e.response.text}")
+                return None
+            except Exception as e:
+                logger.critical(f"[ERROR CRÍTICO] Fallo inesperado en PATCH: {str(e)}")
+                return None
+
+    async def put(self, endpoint: str, data: Dict[str, Any], headers: Optional[Dict] = None) -> Optional[
+        Dict[str, Any]]:
+        url = f"{self.base_url}{endpoint}"
+        final_headers = self._get_headers(headers)
+
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            try:
+                response = await client.put(url, json=data, headers=final_headers)
+
+                if response.status_code == 422:
+                    logger.error(f"[DEBUG 422] El CORE rechazó el PUT. Detalle: {response.json()}")
+                    return None
+
+                response.raise_for_status()
+                return response.json()
+
+            except (httpx.ConnectError, httpx.ReadTimeout):
+                logger.warning(f"[OUTBOX PATTERN] CORE inalcanzable (PUT).")
+                return None
+            except httpx.HTTPStatusError as e:
+                logger.error(f"[ERROR CORE] PUT a {url} falló con estado {e.response.status_code}: {e.response.text}")
+                return None
+            except Exception as e:
+                logger.critical(f"[ERROR CRÍTICO] Fallo inesperado en PUT: {str(e)}")
+                return None
+
+    async def delete(self, endpoint: str, headers: Optional[Dict] = None, params: Optional[Dict] = None) -> Optional[
+        Dict[str, Any]]:
+        url = f"{self.base_url}{endpoint}"
+        final_headers = self._get_headers(headers)
+
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
+            try:
+                response = await client.delete(url, headers=final_headers, params=params)
+
+                if response.status_code == 422:
+                    logger.error(f"[DEBUG 422] El CORE rechazó el DELETE. Detalle: {response.json()}")
+                    return None
+
+                response.raise_for_status()
+                # A veces DELETE devuelve 204 No Content, que no tiene JSON.
+                if response.status_code == 204:
+                    return {"mensaje": "Eliminado exitosamente"}
+
+                return response.json()
+
+            except (httpx.ConnectError, httpx.ReadTimeout):
+                logger.warning(f"[OUTBOX PATTERN] CORE inalcanzable (DELETE).")
+                return None
+            except httpx.HTTPStatusError as e:
+                logger.error(
+                    f"[ERROR CORE] DELETE a {url} falló con estado {e.response.status_code}: {e.response.text}")
+                return None
+            except Exception as e:
+                logger.critical(f"[ERROR CRÍTICO] Fallo inesperado en DELETE: {str(e)}")
                 return None
 
 

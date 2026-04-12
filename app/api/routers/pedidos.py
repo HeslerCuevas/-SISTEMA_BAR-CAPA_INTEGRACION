@@ -42,19 +42,28 @@ async def crear_pedido(
         db: Session = Depends(get_session),
         usuario_actual: dict = Depends(get_current_user_payload)
 ):
+    nuevo_uuid = request.factura_local_uuid or uuid.uuid4()
 
-    nuevo_uuid = uuid.uuid4()
+    # 1. Extraer ID del usuario (JWT sub es string, DB es INT)
+    try:
+        user_id_raw = usuario_actual.get("sub")
+        user_id = int(user_id_raw) if user_id_raw else None
+        canal = usuario_actual.get("canal")
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=401, detail="ID de usuario no válido en el token.")
 
+    # 2. Guardado en Base de Datos Local
     try:
         nuevo_pedido = PedidoOffline(
             factura_local_uuid=nuevo_uuid,
-            empleado_id=usuario_actual.get("sub") if usuario_actual.get("canal") == "CAJA" else None,
-            cliente_id=usuario_actual.get("sub") if usuario_actual.get("canal") == "MOVIL" else None,
-            canal_origen=usuario_actual.get("canal"),
+            empleado_id=user_id if canal == "CAJA" else None,
+            cliente_id=user_id if canal == "MOVIL" else None,
+            canal_origen=canal,
             mesa=request.mesa,
             subtotal=request.subtotal,
             total_impuestos=request.total_impuestos,
             propina_legal=request.propina_legal,
+            propina_extra=request.propina_extra,
             total_general=request.total_general,
             estado_sincronizacion="PENDIENTE"
         )
@@ -62,37 +71,41 @@ async def crear_pedido(
 
         for det in request.detalles:
             nuevo_detalle = DetallePedidoOffline(
+                detalle_local_uuid=uuid.uuid4(),
                 factura_local_uuid=nuevo_uuid,
                 producto_id=det.producto_id,
                 cantidad=det.cantidad,
-                precio_unitario_historico=det.precio_unitario,
-                impuesto_historico=0,
+                precio_unitario_historico=det.precio_unitario,  # Nombre exacto de tu SQL
+                impuesto_historico=18.0,
                 monto_impuesto=det.monto_impuesto,
                 subtotal_linea=det.subtotal_linea
             )
             db.add(nuevo_detalle)
 
         db.commit()
-        logger.info(f"Pedido {nuevo_uuid} guardado en Cache Local.")
+        logger.info(f"✅ Pedido {nuevo_uuid} guardado en Sync.Pedidos_Offline.")
 
     except Exception as e:
         db.rollback()
-        logger.critical(f"Error guardando pedido localmente: {e}")
-        raise HTTPException(status_code=500, detail="Error crítico guardando la orden localmente.")
+        logger.error(f"❌ Error DB local: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error interno en DB: {str(e)}")
 
-    datos_para_core = request.model_dump()
-    datos_para_core["canal_origen"] = nuevo_pedido.canal_origen
-    datos_para_core["empleado_id"] = nuevo_pedido.empleado_id
+    datos_para_core = request.model_dump(mode='json')
+
+    datos_para_core["canal_origen"] = canal
     datos_para_core["cliente_id"] = nuevo_pedido.cliente_id
+    datos_para_core["empleado_id"] = nuevo_pedido.empleado_id
+    datos_para_core["propina_extra"] = float(nuevo_pedido.propina_extra)
 
     background_tasks.add_task(intentar_sincronizar_pedido, nuevo_uuid, datos_para_core)
 
+    # 4. RETORNO (Asegúrate de que esta línea esté fuera del try/except)
     return PedidoResponse(
         mensaje="Pedido registrado correctamente en el Gateway.",
         factura_local_uuid=str(nuevo_uuid),
-        estado_sincronizacion="PENDIENTE"
+        estado_sincronizacion="PENDIENTE",
+        propina_extra = request.propina_extra
     )
-
 
 @router.post("/forzar-sincronizacion")
 async def forzar_sincronizacion_offline(

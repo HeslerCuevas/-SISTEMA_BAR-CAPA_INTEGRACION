@@ -8,7 +8,6 @@ from app.db.database import get_session, engine
 from app.clients.core_client import core_client
 from app.models.integration_models import Producto, InventarioLocal, Categoria
 from app.schemas.productos_schema import ProductoResponse, CategoriaResponse
-from app.api.deps import get_current_user_payload
 from app.core.config import settings
 
 logger = logging.getLogger("RouterProductos")
@@ -33,6 +32,7 @@ def sincronizar_cache_productos(core_data: list):
                     prod_local.nombre = item.get("nombre")
                     prod_local.precio_base = item.get("precio_base")
                     prod_local.es_inventariable = item.get("es_inventariable", True)
+                    prod_local.imagen_url = item.get("imagen_url")
                     db_background.add(prod_local)
                     prod_actualizados += 1
                 else:
@@ -43,6 +43,7 @@ def sincronizar_cache_productos(core_data: list):
                         sku=item.get("sku", "N/A"),
                         nombre=item.get("nombre"),
                         precio_base=item.get("precio_base"),
+                        imagen_url=item.get("imagen_url"),
                         es_inventariable=item.get("es_inventariable", True),
                     )
                     db_background.add(nuevo_prod)
@@ -117,10 +118,9 @@ def sincronizar_cache_categorias(core_data: list):
 async def obtener_categorias(
         response: Response,
         background_tasks: BackgroundTasks,
-        db: Session = Depends(get_session),
-        usuario_actual: dict = Depends(get_current_user_payload)
+        db: Session = Depends(get_session)
 ):
-    logger.info(f"Usuario {usuario_actual.get('sub')} solicitando categorias desde {usuario_actual.get('canal')}")
+    logger.info("Solicitando categorias de menú (Acceso Público)")
 
     # 1. Intentar obtener desde el CORE
     core_data = await core_client.get("/productos/categorias")
@@ -162,11 +162,10 @@ async def obtener_productos_por_categoria(
         categoria_id: int,
         response: Response,
         background_tasks: BackgroundTasks,
-        db: Session = Depends(get_session),
-        usuario_actual: dict = Depends(get_current_user_payload)
+        db: Session = Depends(get_session)
 ):
     """Obtiene productos filtrados: Intenta ir al CORE, si falla usa la caché local"""
-    logger.info(f"Solicitando productos de cat {categoria_id} desde {usuario_actual.get('canal')}")
+    logger.info(f"Solicitando productos de cat {categoria_id} (Acceso Público)")
 
     # 1. Intentar obtener desde el CORE
     core_data = await core_client.get(f"/productos/por-categoria/{categoria_id}")
@@ -185,7 +184,8 @@ async def obtener_productos_por_categoria(
                     nombre=item.get("nombre"),
                     precio_base=item.get("precio_base"),
                     cantidad_disponible=item.get("cantidad_disponible", 0),
-                    origen_datos="CORE"
+                    origen_datos="CORE",
+                    imagen_url = item.get("imagen_url")
                 )
             )
         return resultados
@@ -215,11 +215,10 @@ async def obtener_productos_por_categoria(
 async def obtener_catalogo(
         response: Response,
         background_tasks: BackgroundTasks,
-        db: Session = Depends(get_session),
-        usuario_actual: dict = Depends(get_current_user_payload)
+        db: Session = Depends(get_session)
 ):
     """Tu endpoint original intacto."""
-    logger.info(f"Usuario {usuario_actual.get('sub')} solicitando catálogo desde {usuario_actual.get('canal')}")
+    logger.info("Solicitando catálogo completo (Acceso Público)")
 
     core_data = await core_client.get("/productos/")
 
@@ -235,7 +234,8 @@ async def obtener_catalogo(
                     nombre=item.get("nombre"),
                     precio_base=item.get("precio_base"),
                     cantidad_disponible=item.get("cantidad_disponible", 0),
-                    origen_datos="CORE"
+                    origen_datos="CORE",
+                    imagen_url=item.get("imagen_url")
                 )
             )
         return resultados
@@ -255,7 +255,8 @@ async def obtener_catalogo(
                     nombre=prod.nombre,
                     precio_base=float(prod.precio_base),
                     cantidad_disponible=99,
-                    origen_datos="CACHE_LOCAL"
+                    origen_datos="CACHE_LOCAL",
+                    imagen_url=prod.imagen_url
                 )
             )
         return resultados

@@ -5,7 +5,8 @@ import logging
 from app.db.database import get_session
 from app.clients.core_client import core_client
 from app.models.integration_models import Cliente
-from app.core.security import verify_password, get_password_hash  # Utilidades de encriptación
+from app.core.security import verify_password, get_password_hash, \
+    create_access_token  # <-- Importamos creador de tokens
 
 from app.schemas.auth_schemas import (
     ClienteRegistroRequest,
@@ -34,8 +35,7 @@ async def registrar_cliente_movil(
     core_response = await core_client.post("/clientes/auth/registro", data=request.model_dump())
 
     if core_response is None:
-        # Fallback: El CORE está caído. (Para tesis: puedes rechazar o encolar).
-        # Lo más seguro con cuentas nuevas es pedir internet.
+        # Fallback: El CORE está caído.
         raise HTTPException(
             status_code=503,
             detail="No hay conexión con el servidor central para crear cuentas nuevas. Intente más tarde."
@@ -104,10 +104,19 @@ async def login_cliente_movil(
             detail="Email o contraseña incorrectos (Validación Local)"
         )
 
+    # 3. GENERAR EL TOKEN JWT REAL PARA MODO OFFLINE
+    datos_token = {
+        "sub": str(cliente_local.id),
+        "canal": "MOVIL",
+        "nombre": cliente_local.nombre_completo
+    }
+
+    token_real = create_access_token(data=datos_token)
+
     return ClienteLoginResponse(
-        access_token=cliente_local.email,  # En un entorno real se genera un JWT aquí
+        access_token=token_real,
         token_type="bearer",
-        canal="APP_CLIENTE",
+        canal="MOVIL",
         cliente_id=cliente_local.id,
         nombre_completo=cliente_local.nombre_completo
     )

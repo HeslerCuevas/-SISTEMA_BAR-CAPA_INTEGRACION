@@ -1,5 +1,6 @@
 from typing import List, Optional
 from pydantic import BaseModel
+from decimal import Decimal
 
 class DetallePedidoRequest(BaseModel):
     producto_id: int
@@ -9,16 +10,19 @@ class DetallePedidoRequest(BaseModel):
     subtotal_linea: float
 
 class PedidoRequest(BaseModel):
+    factura_local_uuid: Optional[uuid.UUID] = None
     mesa: Optional[int] = None
-    subtotal: float
-    total_impuestos: float
-    propina_legal: float = 0.0
-    total_general: float
+    subtotal: Decimal
+    total_impuestos: Decimal
+    propina_legal: Decimal = Decimal("0.0")
+    propina_extra: Decimal = Decimal("0.0")
+    total_general: Decimal
     detalles: List[DetallePedidoRequest]
-
+10
 class PedidoResponse(BaseModel):
     mensaje: str
     factura_local_uuid: str
+    propina_extra: float
     estado_sincronizacion: str
 
 from pydantic import BaseModel
@@ -35,13 +39,13 @@ class DetalleItemAdicional(BaseModel):
 
 class AgregarItemsRequest(BaseModel):
     cliente_id: Optional[int] = None
-    nuevo_subtotal_agregado: float
-    nuevo_impuesto_agregado: float
+    nuevo_subtotal_agregado: Decimal
+    nuevo_impuesto_agregado: Decimal
     detalles_adicionales: List[DetalleItemAdicional]
 
 class SolicitarCuentaRequest(BaseModel):
     metodo_pago_preferido: str = "EFECTIVO" # o TARJETA
-    propina_voluntaria_extra: float = 0.0
+    propina_extra: Decimal = Decimal("0.0")
 
 class ItemResumen(BaseModel):
     producto_nombre: str
@@ -55,5 +59,6 @@ class ResumenCuentaResponse(BaseModel):
     subtotal_acumulado: float
     total_impuestos_acumulado: float
     propina_legal_acumulada: float
+    propina_extra_acumulada: float
     total_general_acumulado: float
     items_consumidos: List[ItemResumen]

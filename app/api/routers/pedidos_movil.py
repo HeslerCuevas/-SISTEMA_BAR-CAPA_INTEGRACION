@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response
 from sqlmodel import Session, select
 import uuid
+from decimal import Decimal
 import logging
 
 from app.db.database import get_session
@@ -46,10 +47,10 @@ async def agregar_items_local(
 
     try:
         # 1. Actualizar DB Local Inmediatamente
-        pedido.subtotal += payload.nuevo_subtotal_agregado
-        pedido.total_impuestos += payload.nuevo_impuesto_agregado
-        pedido.propina_legal = pedido.subtotal * 0.10
-        pedido.total_general = pedido.subtotal + pedido.total_impuestos + pedido.propina_legal
+        pedido.subtotal += Decimal(str(payload.nuevo_subtotal_agregado))
+        pedido.total_impuestos += Decimal(str(payload.nuevo_impuesto_agregado))
+        pedido.propina_legal = pedido.subtotal * Decimal("0.10")
+        pedido.total_general = pedido.subtotal + pedido.total_impuestos + pedido.propina_legal + pedido.propina_extra
         pedido.estado_sincronizacion = "PENDIENTE"  # Marcamos para asegurar que se sincronice
         db.add(pedido)
 
@@ -112,23 +113,24 @@ async def resumen_cuenta_local(factura_local_uuid: uuid.UUID, db: Session = Depe
 
 
 @router.post("/{factura_local_uuid}/solicitar-cuenta")
-async def solicitar_cuenta_local(
-        factura_local_uuid: uuid.UUID,
-        payload: SolicitarCuentaRequest,
-        background_tasks: BackgroundTasks,
-        db: Session = Depends(get_session)
-):
-    """[OFFLINE-FIRST] Avisa a la caja local y notifica al CORE en 2do plano."""
-    pedido = db.get(PedidoOffline, factura_local_uuid)
+async def solicitar_cuenta_gateway(factura_local_uuid: uuid.UUID, payload: SolicitarCuentaRequest,
+                                   db: Session = Depends(get_session)):
+    pedido = db.exec(select(PedidoOffline).where(PedidoOffline.factura_local_uuid == factura_local_uuid)).first()
+
     if not pedido:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
 
-    # Bloqueamos el pedido localmente para que no añadan más cosas
-    pedido.estado_sincronizacion = "POR_FACTURAR"
+    # 1. Guardamos la propina extra
+    pedido.propina_extra = payload.propina_extra
+
+    pedido.total_general = pedido.subtotal + pedido.total_impuestos + pedido.propina_legal + pedido.propina_extra
+
+    pedido.estado = "POR_FACTURAR"
+
     db.add(pedido)
     db.commit()
 
-    # Sincronizamos con el CORE en background
-    background_tasks.add_task(sync_estado_pedido_core, factura_local_uuid, payload.model_dump(mode='json'))
+    # 2. Notificamos al CORE
+    await core_client.post(f"/pedidos/{factura_local_uuid}/solicitar-cuenta", data=payload.model_dump())
 
-    return {"mensaje": f"Notificación enviada a la caja para pago con {payload.metodo_pago_preferido}"}
+    return {"mensaje": "Cuenta solicitada con propina extra aplicada."}

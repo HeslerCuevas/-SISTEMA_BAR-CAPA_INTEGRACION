@@ -133,6 +133,10 @@ class Producto(SQLModel, table=True):
 
     categoria: Categoria = Relationship(back_populates="productos")
     impuesto: Impuesto = Relationship(back_populates="productos")
+    imagen_url: Optional[str] = Field(
+        default=None,
+        sa_column=Column("ImagenURL", String(1000), nullable=True)
+    )
     inventarios: List["InventarioLocal"] = Relationship(back_populates="producto")
     detalles_pedido: List["DetallePedidoOffline"] = Relationship(back_populates="producto")
 
@@ -176,6 +180,7 @@ class PedidoOffline(SQLModel, table=True):
     fecha_creacion_local: datetime = Field(default_factory=datetime.now,
                                            sa_column=Column("FechaCreacionLocal", DateTime,
                                                             server_default=text("SYSDATETIME()"), nullable=False))
+    estado: str = Field(default="PENDIENTE", sa_column=Column("Estado", String(50)))
     estado_sincronizacion: str = Field(default="PENDIENTE", sa_column=Column("EstadoSincronizacion", String(20),
                                                                              server_default=text("'PENDIENTE'"),
                                                                              nullable=False))
@@ -187,6 +192,9 @@ class PedidoOffline(SQLModel, table=True):
     empleado: Optional[Empleado] = Relationship(back_populates="pedidos_offline")
     cliente: Optional[Cliente] = Relationship(back_populates="pedidos_offline")
     detalles: List["DetallePedidoOffline"] = Relationship(back_populates="pedido")
+    propina_extra: Decimal = Field(default=Decimal("0.0"),
+                                   sa_column=Column("PropinaExtra", Numeric(12, 2), server_default=text("0"),
+                                                    nullable=False))
 
 
 class DetallePedidoOffline(SQLModel, table=True):

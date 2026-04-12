@@ -7,6 +7,7 @@ class ProductoResponse(BaseModel):
     precio_base: float
     cantidad_disponible: int
     origen_datos: str
+    imagen_url: Optional[str] = None
 
 class CategoriaBase(BaseModel):
     nombre: str
