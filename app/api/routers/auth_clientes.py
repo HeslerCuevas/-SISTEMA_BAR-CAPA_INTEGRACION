@@ -1,6 +1,12 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status, Response, BackgroundTasks
 from sqlmodel import Session, select
 import logging
+
+from app.api.deps import get_current_user_payload
+from app.models.integration_models import DispositivoCliente
+from pydantic import BaseModel
 
 from app.db.database import get_session
 from app.clients.core_client import core_client
@@ -32,7 +38,7 @@ async def registrar_cliente_movil(
     logger.info(f"Intentando registrar nuevo cliente: {request.email}")
 
     # 1. Enviar petición al CORE usando tu cliente HTTP
-    core_response = await core_client.post("/clientes/auth/registro", data=request.model_dump())
+    core_response = await core_client.post("/clientes/auth/registro", json=request.model_dump())
 
     if core_response is None:
         # Fallback: El CORE está caído.
@@ -80,7 +86,7 @@ async def login_cliente_movil(
     logger.info(f"Intento de login cliente: {request.email}")
 
     # 1. Intentar validar con el CORE
-    core_response = await core_client.post("/clientes/auth/login", data=request.model_dump())
+    core_response = await core_client.post("/clientes/auth/login", json=request.model_dump())
 
     if core_response is not None and "detail" not in core_response:
         # ¡Internet funciona y credenciales correctas!
@@ -120,3 +126,36 @@ async def login_cliente_movil(
         cliente_id=cliente_local.id,
         nombre_completo=cliente_local.nombre_completo
     )
+
+
+class TokenRequest(BaseModel):
+    fcm_token: str
+    plataforma: str
+
+
+@router.post("/registrar-dispositivo")
+async def registrar_dispositivo(
+        request: TokenRequest,
+        db: Session = Depends(get_session),
+        usuario: dict = Depends(get_current_user_payload)
+):
+    cliente_id = int(usuario.get("sub"))
+
+    # Lógica de UPSERT (Update or Insert)
+    statement = select(DispositivoCliente).where(DispositivoCliente.cliente_id == cliente_id)
+    dispositivo = db.exec(statement).first()
+
+    if dispositivo:
+        dispositivo.fcm_token = request.fcm_token
+        dispositivo.ultima_actualizacion = datetime.utcnow()
+        dispositivo.plataforma = request.plataforma
+    else:
+        dispositivo = DispositivoCliente(
+            cliente_id=cliente_id,
+            fcm_token=request.fcm_token,
+            plataforma=request.plataforma
+        )
+
+    db.add(dispositivo)
+    db.commit()
+    return {"status": "ok", "mensaje": "Token registrado exitosamente"}

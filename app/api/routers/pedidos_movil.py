@@ -17,7 +17,7 @@ router = APIRouter(prefix="/clientes/pedidos", tags=["App Móvil - Gestión Din�
 # --- FUNCIONES BACKGROUND ---
 async def sync_agregar_items_al_core(factura_local_uuid: uuid.UUID, payload: dict):
     try:
-        await core_client.patch(f"/pedidos/{factura_local_uuid}/agregar-items", data=payload)
+        await core_client.patch(f"/pedidos/{factura_local_uuid}/agregar-items", json=payload)
         logger.info(f"Sincronización exitosa de items adicionales para {factura_local_uuid}")
     except Exception as e:
         logger.error(f"Fallo al sincronizar items con CORE: {e}")
@@ -25,7 +25,7 @@ async def sync_agregar_items_al_core(factura_local_uuid: uuid.UUID, payload: dic
 
 async def sync_estado_pedido_core(factura_local_uuid: uuid.UUID, payload: dict):
     try:
-        await core_client.post(f"/pedidos/{factura_local_uuid}/solicitar-cuenta", data=payload)
+        await core_client.post(f"/pedidos/{factura_local_uuid}/solicitar-cuenta", json=payload)
     except Exception as e:
         logger.error(f"Fallo al notificar cierre al CORE: {e}")
 
@@ -108,6 +108,7 @@ async def resumen_cuenta_local(factura_local_uuid: uuid.UUID, db: Session = Depe
         total_impuestos_acumulado=pedido.total_impuestos,
         propina_legal_acumulada=pedido.propina_legal,
         total_general_acumulado=pedido.total_general,
+        propina_extra_acumulada=pedido.propina_extra,
         items_consumidos=items_list
     )
 
@@ -138,7 +139,7 @@ async def solicitar_cuenta_gateway(
 
     await core_client.post(
         f"/pedidos/{factura_local_uuid}/solicitar-cuenta",
-        data=payload_para_core
+        json=payload_para_core
     )
 
     return {"mensaje": "Cuenta solicitada con propina extra aplicada."}

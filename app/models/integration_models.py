@@ -87,7 +87,7 @@ class DispositivoCliente(SQLModel, table=True):
     id: Optional[int] = Field(default=None, sa_column=Column("Id", Integer, primary_key=True, autoincrement=True))
     cliente_id: int = Field(sa_column=Column("ClienteId", Integer, ForeignKey("Cache.Clientes.Id"), nullable=False))
     fcm_token: str = Field(sa_column=Column("FcmToken", String(1000), nullable=False))
-    plataforma: str = Field(sa_column=Column("Plataforma", String(20), nullable=False))
+    plataforma: str = Field(sa_column=Column("Plataforma", String(50), nullable=False))
     ultima_conexion: datetime = Field(default_factory=datetime.now,
                                       sa_column=Column("UltimaConexion", DateTime, server_default=text("SYSDATETIME()"),
                                                        nullable=False))

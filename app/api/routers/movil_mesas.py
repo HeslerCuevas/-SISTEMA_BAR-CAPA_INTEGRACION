@@ -26,7 +26,7 @@ async def vincular_mesa_movil(
     logger.info(f"Cliente escaneó QR de la Mesa {request.numero_mesa}")
 
     # 1. INTENTO DE RED: Preguntarle al CORE (Si hay internet)
-    core_data = await core_client.post("/mesas/vincular", data=request.model_dump())
+    core_data = await core_client.post("/mesas/vincular", json=request.model_dump())
 
     if core_data is not None and "detail" not in core_data:
         response.headers["X-Data-Source"] = "CORE"
@@ -71,7 +71,7 @@ async def llamar_mesero_movil(
     [OFFLINE-FIRST] Notifica a los meseros. Si no hay internet, solo alerta a la caja local.
     """
     # 1. Intentar enviar la alerta al CORE
-    core_data = await core_client.post(f"/mesas/{numero_mesa}/llamar-mesero", data=request.model_dump())
+    core_data = await core_client.post(f"/mesas/{numero_mesa}/llamar-mesero", json=request.model_dump())
 
     if core_data is not None and "detail" not in core_data:
         response.headers["X-Data-Source"] = "CORE"

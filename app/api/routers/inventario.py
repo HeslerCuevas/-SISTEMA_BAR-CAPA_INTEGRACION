@@ -107,7 +107,7 @@ async def registrar_movimiento(
             "movimiento_local_uuid": str(nuevo_movimiento.id)
         }
 
-        respuesta_core = await core_client.post("/inventario/movimiento", data=payload_core)
+        respuesta_core = await core_client.post("/inventario/movimiento", json=payload_core)
 
         if respuesta_core:
             nuevo_movimiento.estado_sincronizacion = "COMPLETADO"

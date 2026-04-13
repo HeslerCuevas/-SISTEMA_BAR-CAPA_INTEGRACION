@@ -49,14 +49,16 @@ class CoreClient:
                 logger.critical(f"[ERROR CRÍTICO] Fallo inesperado comunicándose con el CORE: {str(e)}")
                 return None
 
-    async def post(self, endpoint: str, data: Dict[str, Any], headers: Optional[Dict] = None) -> Optional[
-        Dict[str, Any]]:
+    # ✅ CAMBIO AQUÍ: Ahora acepta tanto 'data' como 'json' explícitamente
+    async def post(self, endpoint: str, data: Optional[Dict[str, Any]] = None, json: Optional[Dict[str, Any]] = None, headers: Optional[Dict] = None, params: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
         url = f"{self.base_url}{endpoint}"
         final_headers = self._get_headers(headers)
 
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             try:
-                response = await client.post(url, json=data, headers=final_headers)
+                # ✅ Pasamos ambos a httpx. Solo uno debería tener valor, pero la librería lo maneja.
+                # También añadimos 'params' para soportar variables de URL
+                response = await client.post(url, data=data, json=json, headers=final_headers, params=params)
 
                 if response.status_code == 422:
                     logger.error(f"[DEBUG 422] El CORE rechazó el POST. Detalle: {response.json()}")
@@ -76,14 +78,14 @@ class CoreClient:
                 logger.critical(f"[ERROR CRÍTICO] Fallo inesperado en POST: {str(e)}")
                 return None
 
-    async def patch(self, endpoint: str, data: Dict[str, Any], headers: Optional[Dict] = None) -> Optional[
-        Dict[str, Any]]:
+    # ✅ CAMBIO AQUÍ: Consistencia con post()
+    async def patch(self, endpoint: str, data: Optional[Dict[str, Any]] = None, json: Optional[Dict[str, Any]] = None, headers: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
         url = f"{self.base_url}{endpoint}"
         final_headers = self._get_headers(headers)
 
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             try:
-                response = await client.patch(url, json=data, headers=final_headers)
+                response = await client.patch(url, data=data, json=json, headers=final_headers)
 
                 if response.status_code == 422:
                     logger.error(f"[DEBUG 422] El CORE rechazó el PATCH. Detalle: {response.json()}")
@@ -103,14 +105,14 @@ class CoreClient:
                 logger.critical(f"[ERROR CRÍTICO] Fallo inesperado en PATCH: {str(e)}")
                 return None
 
-    async def put(self, endpoint: str, data: Dict[str, Any], headers: Optional[Dict] = None) -> Optional[
-        Dict[str, Any]]:
+    # ✅ CAMBIO AQUÍ: Consistencia con post()
+    async def put(self, endpoint: str, data: Optional[Dict[str, Any]] = None, json: Optional[Dict[str, Any]] = None, headers: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
         url = f"{self.base_url}{endpoint}"
         final_headers = self._get_headers(headers)
 
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             try:
-                response = await client.put(url, json=data, headers=final_headers)
+                response = await client.put(url, data=data, json=json, headers=final_headers)
 
                 if response.status_code == 422:
                     logger.error(f"[DEBUG 422] El CORE rechazó el PUT. Detalle: {response.json()}")

@@ -1,5 +1,8 @@
 import uvicorn
 import traceback
+import firebase_admin  # <--- NUEVO
+from firebase_admin import credentials  # <--- NUEVO
+from pathlib import Path  # Para manejar rutas de archivos
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Depends
 from fastapi.responses import JSONResponse
@@ -26,7 +29,6 @@ from app.api.routers import (
 from app.services.sync_service import procesar_pedidos_pendientes, procesar_movimientos_pendientes
 
 # ---------------- CONFIGURACIÓN DE SEGURIDAD ----------------
-# Esto activa el campo "Value" en Swagger para pegar el Token Bearer a mano
 security_scheme = HTTPBearer()
 
 # ---------------- TAREAS EN SEGUNDO PLANO (SCHEDULER) ----------------
@@ -48,10 +50,24 @@ async def tarea_sincronizacion_programada():
         print(f"[ERROR SCHEDULER] Fallo durante la sincronización: {e}")
 
 
-# ---------------- CICLO DE VIDA (Adiós al DeprecationWarning) ----------------
+# ---------------- CICLO DE VIDA (Lifespan) ----------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Iniciando Gateway...")
+
+    # --- INICIALIZACIÓN DE FIREBASE ADMIN ---
+    try:
+        # Asegúrate de colocar tu archivo .json en la raíz o en una carpeta 'certs'
+        ruta_cert = Path("firebase-adminsdk.json")
+        if ruta_cert.exists():
+            cred = credentials.Certificate(str(ruta_cert))
+            firebase_admin.initialize_app(cred)
+            print("🔥 Firebase Admin SDK inicializado correctamente.")
+        else:
+            print("⚠️ ADVERTENCIA: No se encontró 'firebase-adminsdk.json'. Las notificaciones Push no funcionarán.")
+    except Exception as e:
+        print(f"❌ Error al inicializar Firebase: {e}")
+
     print("Verificando/Creando esquemas en SQL Server Local...")
     SQLModel.metadata.create_all(engine)
 
@@ -61,7 +77,7 @@ async def lifespan(app: FastAPI):
 
     print("Sistema listo y protegido.")
 
-    yield  # Aquí es donde la aplicación se queda corriendo
+    yield  # La app corre aquí
 
     print("Apagando Gateway y deteniendo Scheduler...")
     scheduler.shutdown()
@@ -72,7 +88,7 @@ app = FastAPI(
     title="BAR INTEGRATION GATEWAY",
     description="Capa de Resiliencia, Seguridad y Auditoría para el Bar",
     version="1.0.0",
-    swagger_ui_parameters={"persistAuthorization": True},  # Mantiene el token si refrescas la página
+    swagger_ui_parameters={"persistAuthorization": True},
     lifespan=lifespan
 )
 
@@ -115,15 +131,11 @@ app.include_router(movil_mesas.router, prefix="/api/v1")
 app.include_router(pedidos_movil.router, prefix="/api/v1")
 
 
-# ---------------- TRUCO PARA ACTIVAR SWAGGER HTTPBearer ----------------
-# Esta ruta no hace nada real y no saldrá en los docs, pero "engaña"
-# a FastAPI para que muestre la opción HTTPBearer en el candado global.
 @app.get("/login-token-check", include_in_schema=False)
 async def check_security(token: str = Depends(security_scheme)):
     return {"status": "ok"}
 
 
-# ---------------- RUTA RAÍZ ----------------
 @app.get("/", tags=["Estado del Sistema"])
 async def root():
     return {

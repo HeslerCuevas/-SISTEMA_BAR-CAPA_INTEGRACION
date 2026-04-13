@@ -7,8 +7,9 @@ from app.db.database import get_session
 from app.services.sync_service import procesar_pedidos_pendientes
 from app.api.deps import get_current_user_payload
 from app.schemas.pedidos_schema import PedidoRequest, PedidoResponse
-from app.models.integration_models import PedidoOffline, DetallePedidoOffline
+from app.models.integration_models import PedidoOffline, DetallePedidoOffline, DispositivoCliente
 from app.clients.core_client import core_client
+from app.services.fcm_service import enviar_notificacion_pago
 
 logger = logging.getLogger("RouterPedidos")
 router = APIRouter(prefix="/pedidos", tags=["Ventas y Pedidos"])
@@ -20,7 +21,7 @@ async def intentar_sincronizar_pedido(pedido_uuid: uuid.UUID, data_pedido: dict)
     payload_core = data_pedido.copy()
     payload_core["factura_local_uuid"] = str(pedido_uuid)
 
-    respuesta = await core_client.post("/pedidos/", data=payload_core)
+    respuesta = await core_client.post("/pedidos/", json=payload_core)
 
     with Session(engine) as session:
         pedido = session.get(PedidoOffline, pedido_uuid)
@@ -149,9 +150,12 @@ async def forzar_sincronizacion_offline(
     }
 
 
+# Asegúrate de tener importado DispositivoCliente y enviar_notificacion_pago
+
 @router.post("/{factura_local_uuid}/facturar")
 async def facturar_pedido(
         factura_local_uuid: uuid.UUID,
+        background_tasks: BackgroundTasks,
         db: Session = Depends(get_session),
         usuario: dict = Depends(get_current_user_payload)
 ):
@@ -163,32 +167,51 @@ async def facturar_pedido(
     if pedido.estado == "FACTURADO":
         return {"mensaje": "El pedido ya se encontraba facturado.", "sync": pedido.estado_sincronizacion}
 
+    # Marcamos como facturado localmente
     pedido.estado = "FACTURADO"
     pedido.estado_sincronizacion = "PENDIENTE"
 
     db.add(pedido)
     db.commit()
 
+    # Obtenemos el ID del empleado que está usando la caja
     empleado_id = usuario.get("sub")
+
+    # 🚨 EL CAMBIO CRÍTICO: Usamos 'json=' para mandar un payload limpio
     respuesta_core = await core_client.post(
         f"/pedidos/{factura_local_uuid}/facturar",
-        data={"empleado_id": empleado_id}
+        json={"empleado_id": int(empleado_id)}
     )
 
     if respuesta_core:
+        # Si el CORE responde exitosamente, actualizamos la sincronización
         pedido.estado_sincronizacion = "COMPLETADO"
         db.add(pedido)
         db.commit()
+
+        # === Lógica de Notificaciones Push (FCM) ===
+        if pedido.cliente_id:
+            dispositivo = db.exec(
+                select(DispositivoCliente).where(DispositivoCliente.cliente_id == pedido.cliente_id)
+            ).first()
+
+            if dispositivo and dispositivo.fcm_token:
+                background_tasks.add_task(
+                    enviar_notificacion_pago,
+                    dispositivo.fcm_token,
+                    str(factura_local_uuid)
+                )
+
         return {
             "mensaje": f"Pedido {factura_local_uuid} facturado y sincronizado.",
             "sync": "COMPLETADO"
         }
 
+    # Si respuesta_core es None (porque falló la red o dio timeout), cae aquí
     return {
         "mensaje": "CORE offline. Pedido facturado localmente. Se sincronizará en breve.",
         "sync": "PENDIENTE"
     }
-
 
 @router.post("/{factura_local_uuid}/cancelar")
 async def cancelar_pedido(
@@ -212,7 +235,7 @@ async def cancelar_pedido(
     try:
         respuesta_core = await core_client.post(
             f"/pedidos/{factura_local_uuid}/cancelar",
-            data={"empleado_id": empleado_id, "motivo": "Cancelación desde Capa de Integracion"}
+            json={"empleado_id": empleado_id, "motivo": "Cancelación desde Capa de Integracion"}
         )
 
         if respuesta_core:
