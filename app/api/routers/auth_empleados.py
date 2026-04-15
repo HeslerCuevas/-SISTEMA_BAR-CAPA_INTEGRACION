@@ -17,8 +17,8 @@ router = APIRouter(prefix="/auth", tags=["Autenticación"])
 
 @router.post("/login", response_model=TokenResponse)
 def login(
-        form_data: OAuth2PasswordRequestForm = Depends(),
-        db: Session = Depends(get_session)
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_session)
 ):
     """
     Endpoint de Login para la Capa de Integración.
@@ -27,7 +27,6 @@ def login(
     print(f"🔍 Intentando login para el usuario: '{form_data.username}'")
 
     # 1. Búsqueda Dual: Intentamos encontrar al empleado por correo O por cédula
-    # Nota: Usamos Empleado.gmail porque así está definido en tu modelo de caché
     statement = select(Empleado).where(
         or_(
             Empleado.gmail == form_data.username,
@@ -47,12 +46,35 @@ def login(
 
     print(f"✅ Usuario encontrado: {empleado.nombre_completo}")
 
-    # 3. Verificación de contraseña (Hash)
-    if not verify_password(form_data.password, empleado.password_hash):
-        print(f"🔑 Password incorrecto para: {form_data.username}")
+# 3. VERIFICACIÓN DE CONTRASEÑA REAL (Producción)
+    try:
+        # Intentamos obtener el hash de la base de datos (manejando posibles nombres de columna)
+        password_db_hash = getattr(empleado, "PasswordHash", getattr(empleado, "password_hash", None))
+        
+        if not password_db_hash:
+            print(f"❌ El usuario {form_data.username} no tiene un hash de contraseña definido.")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error de configuración de seguridad en el servidor."
+            )
+
+        # Verificamos si la contraseña plana coincide con el hash Bcrypt
+        if not verify_password(form_data.password, password_db_hash):
+            print(f"🔑 Intento fallido: Contraseña incorrecta para {form_data.username}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, 
+                detail="Credenciales inválidas."
+            )
+            
+        print(f"🔒 Verificación criptográfica exitosa para: {empleado.nombre_completo}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"🔥 Error inesperado en seguridad: {e}")
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Contraseña incorrecta."
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Fallo interno en la validación de seguridad."
         )
 
     # 4. Verificación de estado activo
@@ -63,8 +85,7 @@ def login(
             detail="El usuario está inactivo en el sistema."
         )
 
-    # 5. Generación del Token (añadimos el canal para el Gateway)
-    # Convertimos ID a string para evitar errores de serialización en el JWT
+    # 5. Generación del Token
     access_token = create_access_token(
         subject=str(empleado.id),
         canal="CAJA"
