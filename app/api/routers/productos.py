@@ -6,7 +6,7 @@ from datetime import datetime
 
 from app.db.database import get_session, engine
 from app.clients.core_client import core_client
-from app.models.integration_models import Producto, InventarioLocal, Categoria
+from app.models.integration_models import Producto, InventarioLocal, Categoria, Impuesto
 from app.schemas.productos_schema import ProductoResponse, CategoriaResponse
 from app.core.config import settings
 
@@ -23,6 +23,21 @@ def sincronizar_cache_productos(core_data: list):
             inv_actualizados = 0
 
             for item in core_data:
+                cat_id = item.get("categoria_id")
+                imp_id = item.get("impuesto_id")
+
+                if cat_id:
+                    cat_local = db_background.get(Categoria, cat_id)
+                    if not cat_local:
+                        db_background.add(Categoria(id=cat_id, nombre="Cat. Sincronizada"))
+                        db_background.commit()
+
+                if imp_id:
+                    imp_local = db_background.get(Impuesto, imp_id)
+                    if not imp_local:
+                        db_background.add(Impuesto(id=imp_id, nombre="Imp. Sincronizado", tasa_porcentaje=18.0))
+                        db_background.commit()
+
                 prod_local = db_background.exec(
                     select(Producto).where(Producto.id == item.get("id"))
                 ).first()
@@ -33,13 +48,15 @@ def sincronizar_cache_productos(core_data: list):
                     prod_local.precio_base = item.get("precio_base")
                     prod_local.es_inventariable = item.get("es_inventariable", True)
                     prod_local.imagen_url = item.get("imagen_url")
+                    prod_local.categoria_id = cat_id if cat_id else prod_local.categoria_id
+                    prod_local.impuesto_id = imp_id if imp_id else prod_local.impuesto_id
                     db_background.add(prod_local)
                     prod_actualizados += 1
                 else:
                     nuevo_prod = Producto(
                         id=item.get("id"),
-                        categoria_id=item.get("categoria_id", 1),
-                        impuesto_id=item.get("impuesto_id", 1),
+                        categoria_id=cat_id if cat_id else 1,
+                        impuesto_id=imp_id if imp_id else 1,
                         sku=item.get("sku", "N/A"),
                         nombre=item.get("nombre"),
                         precio_base=item.get("precio_base"),
@@ -122,15 +139,12 @@ async def obtener_categorias(
 ):
     logger.info("Solicitando categorias de menú (Acceso Público)")
 
-    # 1. Intentar obtener desde el CORE
     core_data = await core_client.get("/productos/categorias")
 
     if core_data is not None:
         response.headers["X-Data-Source"] = "CORE"
-        # 2. Sincronizar localmente en background
         background_tasks.add_task(sincronizar_cache_categorias, core_data)
 
-        # Mapeamos la respuesta del CORE al esquema esperado
         return [
             CategoriaResponse(
                 id=item.get("id"),
@@ -140,7 +154,6 @@ async def obtener_categorias(
             ) for item in core_data
         ]
     else:
-        # 3. Fallback: El CORE está caído, respondemos con SQL Server Local
         response.headers["X-Data-Source"] = "CACHE_LOCAL"
         logger.warning("[FALLBACK] CORE inaccesible. Sirviendo categorías desde SQL Server Local.")
 
@@ -164,16 +177,13 @@ async def obtener_productos_por_categoria(
         background_tasks: BackgroundTasks,
         db: Session = Depends(get_session)
 ):
-    """Obtiene productos filtrados: Intenta ir al CORE, si falla usa la caché local"""
     logger.info(f"Solicitando productos de cat {categoria_id} (Acceso Público)")
 
-    # 1. Intentar obtener desde el CORE
     core_data = await core_client.get(f"/productos/por-categoria/{categoria_id}")
 
     if core_data is not None:
         response.headers["X-Data-Source"] = "CORE"
 
-        # Reutilizamos tu función maestra de sincronización de productos!
         background_tasks.add_task(sincronizar_cache_productos, core_data)
 
         resultados = []
@@ -185,12 +195,12 @@ async def obtener_productos_por_categoria(
                     precio_base=item.get("precio_base"),
                     cantidad_disponible=item.get("cantidad_disponible", 0),
                     origen_datos="CORE",
-                    imagen_url = item.get("imagen_url")
+                    imagen_url=item.get("imagen_url"),
+                    id_categoria=item.get("categoria_id")
                 )
             )
         return resultados
     else:
-        # 2. Fallback: CORE caído, buscar en caché local
         response.headers["X-Data-Source"] = "CACHE_LOCAL"
         logger.warning(f"[FALLBACK] CORE inaccesible. Sirviendo productos cat {categoria_id} desde Local.")
 
@@ -204,8 +214,10 @@ async def obtener_productos_por_categoria(
                     id=prod.id,
                     nombre=prod.nombre,
                     precio_base=float(prod.precio_base),
-                    cantidad_disponible=99,  # Al no tener CORE, asumimos stock
-                    origen_datos="CACHE_LOCAL"
+                    cantidad_disponible=99,
+                    origen_datos="CACHE_LOCAL",
+                    imagen_url=prod.imagen_url,
+                    id_categoria=prod.categoria_id
                 )
             )
         return resultados
@@ -217,7 +229,6 @@ async def obtener_catalogo(
         background_tasks: BackgroundTasks,
         db: Session = Depends(get_session)
 ):
-    """Tu endpoint original intacto."""
     logger.info("Solicitando catálogo completo (Acceso Público)")
 
     core_data = await core_client.get("/productos/")
@@ -235,7 +246,8 @@ async def obtener_catalogo(
                     precio_base=item.get("precio_base"),
                     cantidad_disponible=item.get("cantidad_disponible", 0),
                     origen_datos="CORE",
-                    imagen_url=item.get("imagen_url")
+                    imagen_url=item.get("imagen_url"),
+                    id_categoria=item.get("categoria_id")
                 )
             )
         return resultados
@@ -244,7 +256,7 @@ async def obtener_catalogo(
         response.headers["X-Data-Source"] = "CACHE_LOCAL"
         logger.warning("[FALLBACK] CORE inaccesible. Sirviendo catálogo desde SQL Server Local.")
 
-        statement = select(Producto)  # Removido el filtro activo==True si no está en tu modelo local
+        statement = select(Producto)
         productos_locales = db.exec(statement).all()
 
         resultados = []
@@ -256,7 +268,8 @@ async def obtener_catalogo(
                     precio_base=float(prod.precio_base),
                     cantidad_disponible=99,
                     origen_datos="CACHE_LOCAL",
-                    imagen_url=prod.imagen_url
+                    imagen_url=prod.imagen_url,
+                    id_categoria=prod.categoria_id
                 )
             )
         return resultados

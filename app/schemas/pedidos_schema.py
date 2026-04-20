@@ -1,4 +1,3 @@
-from typing import List, Optional
 from pydantic import BaseModel
 from decimal import Decimal
 
@@ -19,7 +18,7 @@ class PedidoRequest(BaseModel):
     propina_extra: Decimal = Decimal("0.0")
     total_general: Decimal
     detalles: List[DetallePedidoRequest]
-10
+
 class PedidoResponse(BaseModel):
     mensaje: str
     factura_local_uuid: str
@@ -45,7 +44,7 @@ class AgregarItemsRequest(BaseModel):
     detalles_adicionales: List[DetalleItemAdicional]
 
 class SolicitarCuentaRequest(BaseModel):
-    metodo_pago_preferido: str = "EFECTIVO" # o TARJETA
+    metodo_pago_preferido: str = "EFECTIVO"
     propina_extra: Decimal = Decimal("0.0")
 
 class ItemResumen(BaseModel):

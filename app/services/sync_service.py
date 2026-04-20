@@ -47,13 +47,25 @@ async def procesar_pedidos_pendientes(db: Session) -> Tuple[int, int]:
                 ]
             }
 
-            respuesta = await core_client.post("/pedidos/", data=payload_core)
+
+            respuesta = await core_client.post("/pedidos/", json=payload_core)
 
             if respuesta:
+                if pedido.estado == "FACTURADO":
+                    logger.info(f"El pedido {pedido.factura_local_uuid} fue cobrado offline. Facturando en el CORE...")
+
+                    resp_factura = await core_client.post(
+                        f"/pedidos/{pedido.factura_local_uuid}/facturar",
+                        json={"empleado_id": pedido.empleado_id}
+                    )
+
+                    if not resp_factura:
+                        logger.warning(f"Se subió el pedido {pedido.factura_local_uuid}, pero el CORE no lo facturó.")
+
                 pedido.estado_sincronizacion = "COMPLETADO"
                 pedido.ultimo_error = None
                 exitosos += 1
-                logger.info(f"Pedido {pedido.factura_local_uuid} sincronizado.")
+                logger.info(f"Pedido {pedido.factura_local_uuid} sincronizado totalmente.")
             else:
                 pedido.intentos_sincronizacion += 1
                 pedido.ultimo_error = "CORE inalcanzable o devolvió error."
@@ -94,7 +106,7 @@ async def procesar_movimientos_pendientes(session: Session):
             "motivo": mov.motivo
         }
 
-        respuesta = await core_client.post("/inventario/movimiento", data=payload_core)
+        respuesta = await core_client.post("/inventario/movimiento", json=payload_core)
 
         if respuesta:
             mov.estado_sincronizacion = "COMPLETADO"

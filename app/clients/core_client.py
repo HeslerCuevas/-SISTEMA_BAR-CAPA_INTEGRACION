@@ -1,4 +1,3 @@
-import os
 import httpx
 import logging
 from typing import Optional, Dict, Any
@@ -12,7 +11,6 @@ class CoreClient:
     def __init__(self):
         self.base_url = settings.CORE_URL
         self.gateway_token = settings.CORE_SECRET_KEY
-        # Timeout balanceado: 5s para conectar, 10s en total
         self.timeout = httpx.Timeout(10.0, connect=5.0)
 
     def _get_headers(self, extra_headers: Optional[Dict] = None) -> Dict[str, str]:
@@ -49,15 +47,12 @@ class CoreClient:
                 logger.critical(f"[ERROR CRÍTICO] Fallo inesperado comunicándose con el CORE: {str(e)}")
                 return None
 
-    # ✅ CAMBIO AQUÍ: Ahora acepta tanto 'data' como 'json' explícitamente
     async def post(self, endpoint: str, data: Optional[Dict[str, Any]] = None, json: Optional[Dict[str, Any]] = None, headers: Optional[Dict] = None, params: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
         url = f"{self.base_url}{endpoint}"
         final_headers = self._get_headers(headers)
 
         async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             try:
-                # ✅ Pasamos ambos a httpx. Solo uno debería tener valor, pero la librería lo maneja.
-                # También añadimos 'params' para soportar variables de URL
                 response = await client.post(url, data=data, json=json, headers=final_headers, params=params)
 
                 if response.status_code == 422:
@@ -78,7 +73,6 @@ class CoreClient:
                 logger.critical(f"[ERROR CRÍTICO] Fallo inesperado en POST: {str(e)}")
                 return None
 
-    # ✅ CAMBIO AQUÍ: Consistencia con post()
     async def patch(self, endpoint: str, data: Optional[Dict[str, Any]] = None, json: Optional[Dict[str, Any]] = None, headers: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
         url = f"{self.base_url}{endpoint}"
         final_headers = self._get_headers(headers)
@@ -105,7 +99,6 @@ class CoreClient:
                 logger.critical(f"[ERROR CRÍTICO] Fallo inesperado en PATCH: {str(e)}")
                 return None
 
-    # ✅ CAMBIO AQUÍ: Consistencia con post()
     async def put(self, endpoint: str, data: Optional[Dict[str, Any]] = None, json: Optional[Dict[str, Any]] = None, headers: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
         url = f"{self.base_url}{endpoint}"
         final_headers = self._get_headers(headers)
@@ -145,7 +138,6 @@ class CoreClient:
                     return None
 
                 response.raise_for_status()
-                # A veces DELETE devuelve 204 No Content, que no tiene JSON.
                 if response.status_code == 204:
                     return {"mensaje": "Eliminado exitosamente"}
 
@@ -163,5 +155,4 @@ class CoreClient:
                 return None
 
 
-# SINGLETON
 core_client = CoreClient()

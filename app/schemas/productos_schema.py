@@ -8,6 +8,7 @@ class ProductoResponse(BaseModel):
     cantidad_disponible: int
     origen_datos: str
     imagen_url: Optional[str] = None
+    id_categoria: Optional[int] = None
 
 class CategoriaBase(BaseModel):
     nombre: str
@@ -21,4 +22,4 @@ class CategoriaResponse(CategoriaBase):
     id: int
 
     class Config:
-        from_attributes = True  # Esto permite a Pydantic leer desde modelos de SQLAlchemy/SQLModel
+        from_attributes = True

@@ -28,7 +28,7 @@ async def get_ventas_hoy(db: Session = Depends(get_session)) -> Dict[str, Any]:
         func.sum(PedidoOffline.total_general),
         func.count(PedidoOffline.factura_local_uuid)
     ).where(
-        PedidoOffline.estado_sincronizacion != "ERROR",  # Filtramos los fallidos
+        PedidoOffline.estado_sincronizacion != "ERROR",
         func.cast(PedidoOffline.fecha_creacion_local, Date) == date.today()
     )
 

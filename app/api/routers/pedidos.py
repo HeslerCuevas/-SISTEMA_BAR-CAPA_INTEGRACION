@@ -1,3 +1,5 @@
+from typing import List
+
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlmodel import Session, select
 import uuid
@@ -45,7 +47,6 @@ async def crear_pedido(
 ):
     nuevo_uuid = request.factura_local_uuid or uuid.uuid4()
 
-    # 1. Extraer ID del usuario (JWT sub es string, DB es INT)
     try:
         user_id_raw = usuario_actual.get("sub")
         user_id = int(user_id_raw) if user_id_raw else None
@@ -53,7 +54,6 @@ async def crear_pedido(
     except (ValueError, TypeError):
         raise HTTPException(status_code=401, detail="ID de usuario no válido en el token.")
 
-    # 2. Guardado en Base de Datos Local
     try:
         nuevo_pedido = PedidoOffline(
             factura_local_uuid=nuevo_uuid,
@@ -70,14 +70,11 @@ async def crear_pedido(
         )
         db.add(nuevo_pedido)
 
-        # --- ARREGLO CRÍTICO: Sincronización de UUIDs de Detalles ---
         detalles_para_core = []
 
         for det in request.detalles:
-            # 1. Determinamos el UUID (Prioridad: Flutter > Nuevo generado aquí)
             d_uuid = det.detalle_local_uuid or uuid.uuid4()
 
-            # 2. Creamos el objeto para la DB local de Integración
             nuevo_detalle = DetallePedidoOffline(
                 detalle_local_uuid=d_uuid,
                 factura_local_uuid=nuevo_uuid,
@@ -90,27 +87,22 @@ async def crear_pedido(
             )
             db.add(nuevo_detalle)
 
-            # 3. Preparamos el ítem para el payload del CORE asegurando el UUID
-            item_json = det.model_dump(mode='json')  # mode='json' limpia Decimals/UUIDs
+            item_json = det.model_dump(mode='json')
             item_json["detalle_local_uuid"] = str(d_uuid)
             detalles_para_core.append(item_json)
 
         db.commit()
-        logger.info(f"✅ Pedido {nuevo_uuid} guardado en Sync.Pedidos_Offline.")
+        logger.info(f"Pedido {nuevo_uuid} guardado en Sync.Pedidos_Offline.")
 
     except Exception as e:
         db.rollback()
-        logger.error(f"❌ Error DB local: {str(e)}")
+        logger.error(f"Error DB local: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error interno en DB: {str(e)}")
 
-    # 3. Preparar sincronización al CORE (Background Task)
-    # Dump general en modo JSON para limpiar el resto de campos (Decimal, UUID cabecera)
     datos_para_core = request.model_dump(mode='json')
 
-    # Sobrescribimos la lista de detalles con la que YA TIENE los UUIDs inyectados
     datos_para_core["detalles"] = detalles_para_core
 
-    # Inyectamos metadatos del usuario actual
     datos_para_core["canal_origen"] = canal
     datos_para_core["cliente_id"] = nuevo_pedido.cliente_id
     datos_para_core["empleado_id"] = nuevo_pedido.empleado_id
@@ -118,7 +110,6 @@ async def crear_pedido(
 
     background_tasks.add_task(intentar_sincronizar_pedido, nuevo_uuid, datos_para_core)
 
-    # 4. RETORNO
     return PedidoResponse(
         mensaje="Pedido registrado correctamente en el Gateway.",
         factura_local_uuid=str(nuevo_uuid),
@@ -149,9 +140,6 @@ async def forzar_sincronizacion_offline(
         }
     }
 
-
-# Asegúrate de tener importado DispositivoCliente y enviar_notificacion_pago
-
 @router.post("/{factura_local_uuid}/facturar")
 async def facturar_pedido(
         factura_local_uuid: uuid.UUID,
@@ -167,29 +155,24 @@ async def facturar_pedido(
     if pedido.estado == "FACTURADO":
         return {"mensaje": "El pedido ya se encontraba facturado.", "sync": pedido.estado_sincronizacion}
 
-    # Marcamos como facturado localmente
     pedido.estado = "FACTURADO"
     pedido.estado_sincronizacion = "PENDIENTE"
 
     db.add(pedido)
     db.commit()
 
-    # Obtenemos el ID del empleado que está usando la caja
     empleado_id = usuario.get("sub")
 
-    # 🚨 EL CAMBIO CRÍTICO: Usamos 'json=' para mandar un payload limpio
     respuesta_core = await core_client.post(
         f"/pedidos/{factura_local_uuid}/facturar",
         json={"empleado_id": int(empleado_id)}
     )
 
     if respuesta_core:
-        # Si el CORE responde exitosamente, actualizamos la sincronización
         pedido.estado_sincronizacion = "COMPLETADO"
         db.add(pedido)
         db.commit()
 
-        # === Lógica de Notificaciones Push (FCM) ===
         if pedido.cliente_id:
             dispositivo = db.exec(
                 select(DispositivoCliente).where(DispositivoCliente.cliente_id == pedido.cliente_id)
@@ -207,7 +190,6 @@ async def facturar_pedido(
             "sync": "COMPLETADO"
         }
 
-    # Si respuesta_core es None (porque falló la red o dio timeout), cae aquí
     return {
         "mensaje": "CORE offline. Pedido facturado localmente. Se sincronizará en breve.",
         "sync": "PENDIENTE"
@@ -251,3 +233,32 @@ async def cancelar_pedido(
         "mensaje": "Pedido cancelado localmente. El CORE no respondió, se reintentará la sincronización.",
         "core_notificado": False
     }
+
+
+@router.get("/pendientes", response_model=List[dict])
+async def obtener_pedidos_pendientes_caja(
+    db: Session = Depends(get_session)
+):
+    statement = select(PedidoOffline).where(
+        PedidoOffline.estado.in_(["PENDIENTE", "POR_FACTURAR"])
+    ).order_by(PedidoOffline.fecha_creacion_local.asc())
+
+    pedidos_pendientes = db.exec(statement).all()
+
+    if not pedidos_pendientes:
+        return []
+
+    resultado = []
+    for pedido in pedidos_pendientes:
+        resultado.append({
+            "factura_local_uuid": str(pedido.factura_local_uuid),
+            "mesa": pedido.mesa if pedido.mesa else "Para Llevar / Barra",
+            "canal_origen": pedido.canal_origen,
+            "estado": pedido.estado,
+            "subtotal": float(pedido.subtotal),
+            "total_impuestos": float(pedido.total_impuestos),
+            "total_general": float(pedido.total_general),
+            "fecha_creacion": pedido.fecha_creacion_local.strftime('%Y-%m-%d %H:%M')
+        })
+
+    return resultado

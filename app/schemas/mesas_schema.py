@@ -8,12 +8,12 @@ class MesaVincularRequest(BaseModel):
 
 class MesaVincularResponse(BaseModel):
     mensaje: str
-    estado_mesa: str # Puede ser "LIBRE" o "ABIERTA"
+    estado_mesa: str
     numero_mesa: int
     factura_local_uuid_activa: Optional[uuid.UUID] = None
 
 class LlamarMeseroRequest(BaseModel):
-    motivo_llamada: str = "ASISTENCIA_GENERAL" # Ej: LIMPIAR_MESA, CUENTA, AGUA
+    motivo_llamada: str = "ASISTENCIA_GENERAL"
 
 class LlamarMeseroResponse(BaseModel):
     mensaje: str

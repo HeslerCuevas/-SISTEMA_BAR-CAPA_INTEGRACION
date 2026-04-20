@@ -1,10 +1,12 @@
 import uvicorn
 import traceback
-import firebase_admin  # <--- NUEVO
-from firebase_admin import credentials  # <--- NUEVO
-from pathlib import Path  # Para manejar rutas de archivos
+import asyncio
+from app.services.scheduler import auto_sync_worker
+import firebase_admin
+from firebase_admin import credentials
+from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
@@ -14,7 +16,6 @@ from app.core.loggin_middleware import AuditLoggingMiddleware
 from app.db.database import engine
 from sqlmodel import SQLModel, Session
 
-# ---------------- IMPORTACIÓN DE ROUTERS ----------------
 from app.api.routers import (
     auth_empleados,
     productos,
@@ -28,10 +29,8 @@ from app.api.routers import (
 )
 from app.services.sync_service import procesar_pedidos_pendientes, procesar_movimientos_pendientes
 
-# ---------------- CONFIGURACIÓN DE SEGURIDAD ----------------
 security_scheme = HTTPBearer()
 
-# ---------------- TAREAS EN SEGUNDO PLANO (SCHEDULER) ----------------
 scheduler = AsyncIOScheduler()
 
 
@@ -50,23 +49,22 @@ async def tarea_sincronizacion_programada():
         print(f"[ERROR SCHEDULER] Fallo durante la sincronización: {e}")
 
 
-# ---------------- CICLO DE VIDA (Lifespan) ----------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Iniciando Gateway...")
 
-    # --- INICIALIZACIÓN DE FIREBASE ADMIN ---
+    asyncio.create_task(auto_sync_worker())
+    print("Worker de auto-sincronización iniciado.")
     try:
-        # Asegúrate de colocar tu archivo .json en la raíz o en una carpeta 'certs'
         ruta_cert = Path("firebase-adminsdk.json")
         if ruta_cert.exists():
             cred = credentials.Certificate(str(ruta_cert))
             firebase_admin.initialize_app(cred)
-            print("🔥 Firebase Admin SDK inicializado correctamente.")
+            print("Firebase Admin SDK inicializado correctamente.")
         else:
-            print("⚠️ ADVERTENCIA: No se encontró 'firebase-adminsdk.json'. Las notificaciones Push no funcionarán.")
+            print("ADVERTENCIA: No se encontró 'firebase-adminsdk.json'. Las notificaciones Push no funcionarán.")
     except Exception as e:
-        print(f"❌ Error al inicializar Firebase: {e}")
+        print(f"Error al inicializar Firebase: {e}")
 
     print("Verificando/Creando esquemas en SQL Server Local...")
     SQLModel.metadata.create_all(engine)
@@ -77,13 +75,12 @@ async def lifespan(app: FastAPI):
 
     print("Sistema listo y protegido.")
 
-    yield  # La app corre aquí
+    yield
 
     print("Apagando Gateway y deteniendo Scheduler...")
     scheduler.shutdown()
 
 
-# ---------------- INICIALIZACIÓN DE LA APP ----------------
 app = FastAPI(
     title="BAR INTEGRATION GATEWAY",
     description="Capa de Resiliencia, Seguridad y Auditoría para el Bar",
@@ -92,7 +89,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# ---------------- MIDDLEWARES ----------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -103,7 +99,6 @@ app.add_middleware(
 app.add_middleware(AuditLoggingMiddleware)
 
 
-# ---------------- MANEJO GLOBAL DE ERRORES ----------------
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     print(f"[ERROR GLOBAL CRITICO] Fallo en la ruta {request.url.path}")
@@ -119,7 +114,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# ---------------- REGISTRO DE RUTAS ----------------
 app.include_router(auth_empleados.router, prefix="/api/v1")
 app.include_router(auth_clientes.router, prefix="/api/v1")
 app.include_router(productos.router, prefix="/api/v1")
@@ -132,7 +126,7 @@ app.include_router(pedidos_movil.router, prefix="/api/v1")
 
 
 @app.get("/login-token-check", include_in_schema=False)
-async def check_security(token: str = Depends(security_scheme)):
+async def check_security():
     return {"status": "ok"}
 
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Response
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlmodel import Session, select
 import uuid
 from decimal import Decimal
@@ -14,7 +14,6 @@ logger = logging.getLogger("RouterMovilPedidos")
 router = APIRouter(prefix="/clientes/pedidos", tags=["App Móvil - Gestión Dinámica"])
 
 
-# --- FUNCIONES BACKGROUND ---
 async def sync_agregar_items_al_core(factura_local_uuid: uuid.UUID, payload: dict):
     try:
         await core_client.patch(f"/pedidos/{factura_local_uuid}/agregar-items", json=payload)
@@ -30,7 +29,6 @@ async def sync_estado_pedido_core(factura_local_uuid: uuid.UUID, payload: dict):
         logger.error(f"Fallo al notificar cierre al CORE: {e}")
 
 
-# --- ENDPOINTS MÓVILES ---
 
 @router.patch("/{factura_local_uuid}/agregar-items")
 async def agregar_items_local(
@@ -39,19 +37,17 @@ async def agregar_items_local(
         background_tasks: BackgroundTasks,
         db: Session = Depends(get_session)
 ):
-    """[OFFLINE-FIRST] Suma bebidas a la cuenta local y avisa al CORE en 2do plano."""
     pedido = db.get(PedidoOffline, factura_local_uuid)
 
     if not pedido:
         raise HTTPException(status_code=404, detail="Factura local no encontrada")
 
     try:
-        # 1. Actualizar DB Local Inmediatamente
         pedido.subtotal += Decimal(str(payload.nuevo_subtotal_agregado))
         pedido.total_impuestos += Decimal(str(payload.nuevo_impuesto_agregado))
         pedido.propina_legal = pedido.subtotal * Decimal("0.10")
         pedido.total_general = pedido.subtotal + pedido.total_impuestos + pedido.propina_legal + pedido.propina_extra
-        pedido.estado_sincronizacion = "PENDIENTE"  # Marcamos para asegurar que se sincronice
+        pedido.estado_sincronizacion = "PENDIENTE"
         db.add(pedido)
 
         for item in payload.detalles_adicionales:
@@ -69,7 +65,6 @@ async def agregar_items_local(
 
         db.commit()
 
-        # 2. Enviar actualización al CORE sin bloquear al celular
         background_tasks.add_task(sync_agregar_items_al_core, factura_local_uuid, payload.model_dump(mode='json'))
 
         return {
@@ -84,7 +79,6 @@ async def agregar_items_local(
 
 @router.get("/{factura_local_uuid}/resumen", response_model=ResumenCuentaResponse)
 async def resumen_cuenta_local(factura_local_uuid: uuid.UUID, db: Session = Depends(get_session)):
-    """[OFFLINE-FIRST] Lee de la caché local para que la App muestre la cuenta al instante."""
     pedido = db.get(PedidoOffline, factura_local_uuid)
     if not pedido:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
@@ -124,7 +118,6 @@ async def solicitar_cuenta_gateway(
     if not pedido:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
 
-    # 1. Guardamos localmente (SQLModel maneja Decimal bien, no hay problema aquí)
     pedido.propina_extra = payload.propina_extra
     pedido.total_general = pedido.subtotal + pedido.total_impuestos + pedido.propina_legal + pedido.propina_extra
     pedido.estado = "POR_FACTURAR"
@@ -132,10 +125,7 @@ async def solicitar_cuenta_gateway(
     db.add(pedido)
     db.commit()
 
-    # 2. Notificamos al CORE
-    # --- CAMBIO AQUÍ: Añade mode='json' ---
     payload_para_core = payload.model_dump(mode='json')
-    # --------------------------------------
 
     await core_client.post(
         f"/pedidos/{factura_local_uuid}/solicitar-cuenta",

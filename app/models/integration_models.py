@@ -83,7 +83,6 @@ class DispositivoCliente(SQLModel, table=True):
     __tablename__ = "Dispositivos_Clientes"
     __table_args__ = {"schema": "Cache"}
 
-    # Este sí es autoincremental, porque se genera en el Gateway
     id: Optional[int] = Field(default=None, sa_column=Column("Id", Integer, primary_key=True, autoincrement=True))
     cliente_id: int = Field(sa_column=Column("ClienteId", Integer, ForeignKey("Cache.Clientes.Id"), nullable=False))
     fcm_token: str = Field(sa_column=Column("FcmToken", String(1000), nullable=False))
@@ -93,6 +92,14 @@ class DispositivoCliente(SQLModel, table=True):
                                                        nullable=False))
 
     cliente: Cliente = Relationship(back_populates="dispositivos")
+
+    @property
+    def ultima_actualizacion(self):
+        return self.ultima_conexion
+
+    @ultima_actualizacion.setter
+    def ultima_actualizacion(self, value):
+        self.ultima_conexion = value
 
 
 class Impuesto(SQLModel, table=True):
