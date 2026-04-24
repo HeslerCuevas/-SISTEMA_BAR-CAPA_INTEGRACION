@@ -9,7 +9,7 @@ from app.db.database import get_session
 from app.services.sync_service import procesar_pedidos_pendientes
 from app.api.deps import get_current_user_payload
 from app.schemas.pedidos_schema import PedidoRequest, PedidoResponse
-from app.models.integration_models import PedidoOffline, DetallePedidoOffline, DispositivoCliente
+from app.models.integration_models import PedidoOffline, DetallePedidoOffline, DispositivoCliente, MovimientoOffline
 from app.clients.core_client import core_client
 from app.services.fcm_service import enviar_notificacion_pago
 
@@ -43,6 +43,15 @@ async def crear_pedido(
         db: Session = Depends(get_session),
         usuario_actual: dict = Depends(get_current_user_payload)
 ):
+    statement = select(PedidoOffline).where(
+        PedidoOffline.factura_local_uuid == request.factura_local_uuid
+    )
+    pedido_existente = db.exec(statement).first()
+
+    if pedido_existente:
+        print(f"Reintento detectado. Pedido {request.factura_local_uuid} ya estaba guardado.")
+        return {"mensaje": "Pedido ya existía", "factura_local_uuid": str(pedido_existente.factura_local_uuid)}
+
     nuevo_uuid = request.factura_local_uuid or uuid.uuid4()
 
     try:
@@ -51,6 +60,8 @@ async def crear_pedido(
         canal = usuario_actual.get("canal")
     except (ValueError, TypeError):
         raise HTTPException(status_code=401, detail="ID de usuario no válido en el token.")
+
+    empleado_movimiento_id = user_id if canal == "CAJA" and user_id else 1
 
     try:
         if request.propina_legal == Decimal("0.0") and request.subtotal > Decimal("0.0"):
@@ -95,6 +106,22 @@ async def crear_pedido(
             )
             db.add(nuevo_detalle)
 
+            from app.core.config import settings
+            from app.models.integration_models import InventarioLocal
+            from datetime import datetime
+
+            inv_local = db.exec(
+                select(InventarioLocal).where(
+                    InventarioLocal.producto_id == det.producto_id,
+                    InventarioLocal.sucursal_id == settings.SUCURSAL_ID
+                )
+            ).first()
+
+            if inv_local:
+                inv_local.cantidad_disponible -= det.cantidad
+                inv_local.ultima_sincronizacion = datetime.utcnow()
+                db.add(inv_local)
+
             item_json = det.model_dump(mode='json')
             item_json["detalle_local_uuid"] = str(d_uuid)
             item_json["precio_unitario"] = str(det.precio_unitario)
@@ -103,34 +130,20 @@ async def crear_pedido(
             detalles_para_core.append(item_json)
 
         db.commit()
-        logger.info(f"Pedido {nuevo_uuid} guardado en Sync.Pedidos_Offline.")
+        db.refresh(nuevo_pedido)
+        logger.info(f"Pedido {nuevo_uuid} y movimientos de inventario guardados en SQLite/Local.")
+
+        return PedidoResponse(
+            mensaje="Pedido registrado correctamente en el Gateway.",
+            factura_local_uuid=str(nuevo_uuid),
+            estado_sincronizacion="PENDIENTE",
+            propina_extra=request.propina_extra
+        )
 
     except Exception as e:
         db.rollback()
         logger.error(f"Error DB local: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error interno en DB: {str(e)}")
-
-    datos_para_core = request.model_dump(mode='json')
-
-    campos_financieros = ["subtotal", "total_impuestos", "propina_legal", "total_general"]
-    for campo in campos_financieros:
-        if datos_para_core.get(campo) is not None:
-            datos_para_core[campo] = str(datos_para_core[campo])
-
-    datos_para_core["detalles"] = detalles_para_core
-    datos_para_core["canal_origen"] = canal
-    datos_para_core["cliente_id"] = nuevo_pedido.cliente_id
-    datos_para_core["empleado_id"] = nuevo_pedido.empleado_id
-    datos_para_core["propina_extra"] = str(nuevo_pedido.propina_extra)
-
-    background_tasks.add_task(intentar_sincronizar_pedido, nuevo_uuid, datos_para_core)
-
-    return PedidoResponse(
-        mensaje="Pedido registrado correctamente en el Gateway.",
-        factura_local_uuid=str(nuevo_uuid),
-        estado_sincronizacion="PENDIENTE",
-        propina_extra=request.propina_extra
-    )
 
 @router.post("/forzar-sincronizacion")
 async def forzar_sincronizacion_offline(

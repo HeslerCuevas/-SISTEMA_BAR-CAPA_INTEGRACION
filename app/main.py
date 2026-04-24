@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI):
     SQLModel.metadata.create_all(engine)
 
     print("Iniciando programador de tareas (Background Scheduler)...")
-    scheduler.add_job(tarea_sincronizacion_programada, 'interval', seconds=30)
+    scheduler.add_job(tarea_sincronizacion_programada, 'interval', seconds=10)
     scheduler.start()
 
     print("Sistema listo y protegido.")
