@@ -1,9 +1,9 @@
 from typing import List
-
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlmodel import Session, select
 import uuid
 import logging
+from decimal import Decimal
 
 from app.db.database import get_session
 from app.services.sync_service import procesar_pedidos_pendientes
@@ -15,7 +15,6 @@ from app.services.fcm_service import enviar_notificacion_pago
 
 logger = logging.getLogger("RouterPedidos")
 router = APIRouter(prefix="/pedidos", tags=["Ventas y Pedidos"])
-
 
 async def intentar_sincronizar_pedido(pedido_uuid: uuid.UUID, data_pedido: dict):
     from app.db.database import engine
@@ -37,7 +36,6 @@ async def intentar_sincronizar_pedido(pedido_uuid: uuid.UUID, data_pedido: dict)
             session.add(pedido)
             session.commit()
 
-
 @router.post("/", response_model=PedidoResponse, status_code=201)
 async def crear_pedido(
         request: PedidoRequest,
@@ -55,6 +53,16 @@ async def crear_pedido(
         raise HTTPException(status_code=401, detail="ID de usuario no válido en el token.")
 
     try:
+        if request.propina_legal == Decimal("0.0") and request.subtotal > Decimal("0.0"):
+            request.propina_legal = round(request.subtotal * Decimal("0.10"), 2)
+
+        request.total_general = (
+                request.subtotal +
+                request.total_impuestos +
+                request.propina_legal +
+                request.propina_extra
+        )
+
         nuevo_pedido = PedidoOffline(
             factura_local_uuid=nuevo_uuid,
             empleado_id=user_id if canal == "CAJA" else None,
@@ -81,7 +89,7 @@ async def crear_pedido(
                 producto_id=det.producto_id,
                 cantidad=det.cantidad,
                 precio_unitario_historico=det.precio_unitario,
-                impuesto_historico=18.0,
+                impuesto_historico=Decimal("18.0"),
                 monto_impuesto=det.monto_impuesto,
                 subtotal_linea=det.subtotal_linea
             )
@@ -89,6 +97,9 @@ async def crear_pedido(
 
             item_json = det.model_dump(mode='json')
             item_json["detalle_local_uuid"] = str(d_uuid)
+            item_json["precio_unitario"] = str(det.precio_unitario)
+            item_json["monto_impuesto"] = str(det.monto_impuesto)
+            item_json["subtotal_linea"] = str(det.subtotal_linea)
             detalles_para_core.append(item_json)
 
         db.commit()
@@ -101,12 +112,16 @@ async def crear_pedido(
 
     datos_para_core = request.model_dump(mode='json')
 
-    datos_para_core["detalles"] = detalles_para_core
+    campos_financieros = ["subtotal", "total_impuestos", "propina_legal", "total_general"]
+    for campo in campos_financieros:
+        if datos_para_core.get(campo) is not None:
+            datos_para_core[campo] = str(datos_para_core[campo])
 
+    datos_para_core["detalles"] = detalles_para_core
     datos_para_core["canal_origen"] = canal
     datos_para_core["cliente_id"] = nuevo_pedido.cliente_id
     datos_para_core["empleado_id"] = nuevo_pedido.empleado_id
-    datos_para_core["propina_extra"] = float(nuevo_pedido.propina_extra)
+    datos_para_core["propina_extra"] = str(nuevo_pedido.propina_extra)
 
     background_tasks.add_task(intentar_sincronizar_pedido, nuevo_uuid, datos_para_core)
 
@@ -116,7 +131,6 @@ async def crear_pedido(
         estado_sincronizacion="PENDIENTE",
         propina_extra=request.propina_extra
     )
-
 
 @router.post("/forzar-sincronizacion")
 async def forzar_sincronizacion_offline(
@@ -147,51 +161,62 @@ async def facturar_pedido(
         db: Session = Depends(get_session),
         usuario: dict = Depends(get_current_user_payload)
 ):
-    pedido = db.exec(select(PedidoOffline).where(PedidoOffline.factura_local_uuid == factura_local_uuid)).first()
+    pedido = db.exec(
+        select(PedidoOffline).where(PedidoOffline.factura_local_uuid == factura_local_uuid)
+    ).first()
 
     if not pedido:
         raise HTTPException(status_code=404, detail="Pedido no encontrado en el Gateway.")
 
     if pedido.estado == "FACTURADO":
-        return {"mensaje": "El pedido ya se encontraba facturado.", "sync": pedido.estado_sincronizacion}
+        return {
+            "mensaje": "El pedido ya se encontraba facturado.",
+            "sync": pedido.estado_sincronizacion
+        }
 
     pedido.estado = "FACTURADO"
     pedido.estado_sincronizacion = "PENDIENTE"
 
     db.add(pedido)
     db.commit()
+    db.refresh(pedido)
+
+    if pedido.cliente_id:
+        dispositivo = db.exec(
+            select(DispositivoCliente).where(DispositivoCliente.cliente_id == pedido.cliente_id)
+        ).first()
+
+        if dispositivo and dispositivo.fcm_token:
+            background_tasks.add_task(
+                enviar_notificacion_pago,
+                dispositivo.fcm_token,
+                str(factura_local_uuid)
+            )
 
     empleado_id = usuario.get("sub")
 
-    respuesta_core = await core_client.post(
-        f"/pedidos/{factura_local_uuid}/facturar",
-        json={"empleado_id": int(empleado_id)}
-    )
+    try:
+        respuesta_core = await core_client.post(
+            f"/pedidos/{factura_local_uuid}/facturar",
+            json={"empleado_id": int(empleado_id)},
+            timeout=5.0
+        )
 
-    if respuesta_core:
-        pedido.estado_sincronizacion = "COMPLETADO"
-        db.add(pedido)
-        db.commit()
+        if respuesta_core and respuesta_core.status_code == 200:
+            pedido.estado_sincronizacion = "COMPLETADO"
+            db.add(pedido)
+            db.commit()
 
-        if pedido.cliente_id:
-            dispositivo = db.exec(
-                select(DispositivoCliente).where(DispositivoCliente.cliente_id == pedido.cliente_id)
-            ).first()
+            return {
+                "mensaje": "Pedido facturado exitosamente y sincronizado en tiempo real.",
+                "sync": "COMPLETADO"
+            }
 
-            if dispositivo and dispositivo.fcm_token:
-                background_tasks.add_task(
-                    enviar_notificacion_pago,
-                    dispositivo.fcm_token,
-                    str(factura_local_uuid)
-                )
-
-        return {
-            "mensaje": f"Pedido {factura_local_uuid} facturado y sincronizado.",
-            "sync": "COMPLETADO"
-        }
+    except Exception as e:
+        print(f"[WARNING] Fallo de sincronización con el CORE para pedido {factura_local_uuid}: {e}")
 
     return {
-        "mensaje": "CORE offline. Pedido facturado localmente. Se sincronizará en breve.",
+        "mensaje": "Pedido facturado exitosamente (Modo Offline). El sistema lo enviará a la nube en breve.",
         "sync": "PENDIENTE"
     }
 
@@ -234,7 +259,6 @@ async def cancelar_pedido(
         "core_notificado": False
     }
 
-
 @router.get("/pendientes", response_model=List[dict])
 async def obtener_pedidos_pendientes_caja(
     db: Session = Depends(get_session)
@@ -255,9 +279,9 @@ async def obtener_pedidos_pendientes_caja(
             "mesa": pedido.mesa if pedido.mesa else "Para Llevar / Barra",
             "canal_origen": pedido.canal_origen,
             "estado": pedido.estado,
-            "subtotal": float(pedido.subtotal),
-            "total_impuestos": float(pedido.total_impuestos),
-            "total_general": float(pedido.total_general),
+            "subtotal": str(pedido.subtotal),
+            "total_impuestos": str(pedido.total_impuestos),
+            "total_general": str(pedido.total_general),
             "fecha_creacion": pedido.fecha_creacion_local.strftime('%Y-%m-%d %H:%M')
         })
 

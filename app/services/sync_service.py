@@ -31,22 +31,22 @@ async def procesar_pedidos_pendientes(db: Session) -> Tuple[int, int]:
                 "cliente_id": pedido.cliente_id,
                 "canal_origen": pedido.canal_origen,
                 "mesa": pedido.mesa,
-                "subtotal": float(pedido.subtotal),
-                "total_impuestos": float(pedido.total_impuestos),
-                "propina_legal": float(pedido.propina_legal),
-                "total_general": float(pedido.total_general),
+                "subtotal": str(pedido.subtotal),
+                "total_impuestos": str(pedido.total_impuestos),
+                "propina_legal": str(pedido.propina_legal),
+                "propina_extra": str(pedido.propina_extra) if hasattr(pedido, 'propina_extra') else "0.0",
+                "total_general": str(pedido.total_general),
                 "fecha_creacion_local": pedido.fecha_creacion_local.isoformat(),
                 "detalles": [
                     {
                         "producto_id": det.producto_id,
                         "cantidad": det.cantidad,
-                        "precio_unitario": float(det.precio_unitario_historico),
-                        "monto_impuesto": float(det.monto_impuesto),
-                        "subtotal_linea": float(det.subtotal_linea)
+                        "precio_unitario": str(det.precio_unitario_historico),
+                        "monto_impuesto": str(det.monto_impuesto),
+                        "subtotal_linea": str(det.subtotal_linea)
                     } for det in detalles
                 ]
             }
-
 
             respuesta = await core_client.post("/pedidos/", json=payload_core)
 
@@ -84,7 +84,6 @@ async def procesar_pedidos_pendientes(db: Session) -> Tuple[int, int]:
             fallidos += 1
 
     return exitosos, fallidos
-
 
 async def procesar_movimientos_pendientes(session: Session):
     statement = select(MovimientoOffline).where(MovimientoOffline.estado_sincronizacion == "PENDIENTE")

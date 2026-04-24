@@ -9,7 +9,12 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     canal: str
     usuario_id: int
+    nombre: str
+    rol: str
+    sucursal_id: int
 
+    class Config:
+        from_attributes = True
 
 class ClienteRegistroRequest(BaseModel):
     nombre_completo: str
