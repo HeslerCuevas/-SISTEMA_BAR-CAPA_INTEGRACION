@@ -1,6 +1,7 @@
 from datetime import datetime
+from app.core.timezone import get_local_now
 
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from sqlmodel import Session, select
 import logging
 
@@ -33,7 +34,7 @@ async def registrar_cliente_movil(
 ):
     logger.info(f"Intentando registrar nuevo cliente: {request.email}")
 
-    core_response = await core_client.post("/clientes/auth/registro", json=request.model_dump())
+    core_response = await core_client.post("/api/v1/clientes/auth/registro", json=request.model_dump())
 
     if core_response is None:
         raise HTTPException(
@@ -73,7 +74,7 @@ async def login_cliente_movil(
 ):
     logger.info(f"Intento de login cliente: {request.email}")
 
-    core_response = await core_client.post("/clientes/auth/login", json=request.model_dump())
+    core_response = await core_client.post("/api/v1/clientes/auth/login", json=request.model_dump())
 
     if core_response is not None and "detail" not in core_response:
         response.headers["X-Data-Source"] = "CORE"
@@ -129,7 +130,7 @@ async def registrar_dispositivo(
 
     if dispositivo:
         dispositivo.fcm_token = request.fcm_token
-        dispositivo.ultima_actualizacion = datetime.utcnow()
+        dispositivo.ultima_actualizacion = get_local_now()
         dispositivo.plataforma = request.plataforma
     else:
         dispositivo = DispositivoCliente(
@@ -141,3 +142,55 @@ async def registrar_dispositivo(
     db.add(dispositivo)
     db.commit()
     return {"status": "ok", "mensaje": "Token registrado exitosamente"}
+
+
+# ─── Cambio de contraseña ─────────────────────────────────────────────────────
+
+@router.post("/cambiar-password")
+async def cambiar_password_cliente(
+        request: Request,
+        db: Session = Depends(get_session),
+        usuario: dict = Depends(get_current_user_payload)
+):
+    """Proxy al CORE. Requiere token del cliente en el header Authorization."""
+    body = await request.json()
+    core_response = await core_client.post(
+        "/api/v1/clientes/auth/cambiar-password",
+        json=body,
+        headers={"Authorization": request.headers.get("Authorization", "")}
+    )
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+    if "detail" in core_response:
+        raise HTTPException(status_code=400, detail=core_response["detail"])
+    return core_response
+
+
+# ─── Solicitar reset de contraseña ───────────────────────────────────────────
+
+@router.post("/solicitar-reset")
+async def solicitar_reset_cliente(
+        request: Request
+):
+    """Proxy al CORE. Genera y envía email de recuperación. CORE es el único que puede enviar emails."""
+    body = await request.json()
+    core_response = await core_client.post("/api/v1/clientes/auth/solicitar-reset", json=body)
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+    return core_response
+
+
+# ─── Confirmar reset de contraseña ───────────────────────────────────────────
+
+@router.post("/confirmar-reset")
+async def confirmar_reset_cliente(
+        request: Request
+):
+    """Proxy al CORE. Valida el token de reset y cambia la contraseña."""
+    body = await request.json()
+    core_response = await core_client.post("/api/v1/clientes/auth/confirmar-reset", json=body)
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+    if "detail" in core_response:
+        raise HTTPException(status_code=400, detail=core_response["detail"])
+    return core_response

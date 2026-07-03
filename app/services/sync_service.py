@@ -25,37 +25,34 @@ async def procesar_pedidos_pendientes(db: Session) -> Tuple[int, int]:
             detalles_stmt = select(DetallePedidoOffline).where(DetallePedidoOffline.factura_local_uuid == pedido.factura_local_uuid)
             detalles = db.exec(detalles_stmt).all()
 
+            # Build CORE-compatible payload — CORE only accepts these fields in PedidoCreate.
+            # Totals/prices are intentionally excluded; CORE recalculates from its own catalog.
+            canal_origen = pedido.canal_origen if pedido.canal_origen in ("CAJA", "MOVIL", "WEB") else "CAJA"
             payload_core = {
                 "factura_local_uuid": str(pedido.factura_local_uuid),
                 "empleado_id": pedido.empleado_id,
                 "cliente_id": pedido.cliente_id,
-                "canal_origen": pedido.canal_origen,
+                "canal_origen": canal_origen,
                 "mesa": pedido.mesa,
-                "subtotal": str(pedido.subtotal),
-                "total_impuestos": str(pedido.total_impuestos),
-                "propina_legal": str(pedido.propina_legal),
-                "propina_extra": str(pedido.propina_extra) if hasattr(pedido, 'propina_extra') else "0.0",
-                "total_general": str(pedido.total_general),
-                "fecha_creacion_local": pedido.fecha_creacion_local.isoformat(),
+                "propina_extra": float(pedido.propina_extra) if pedido.propina_extra else 0.0,
                 "detalles": [
                     {
                         "producto_id": det.producto_id,
                         "cantidad": det.cantidad,
-                        "precio_unitario": str(det.precio_unitario_historico),
-                        "monto_impuesto": str(det.monto_impuesto),
-                        "subtotal_linea": str(det.subtotal_linea)
+                        "detalle_local_uuid": str(det.detalle_local_uuid)
                     } for det in detalles
                 ]
             }
 
-            respuesta = await core_client.post("/pedidos/", json=payload_core)
+            # CORE API is now prefixed with /api/v1
+            respuesta = await core_client.post("/api/v1/pedidos/", json=payload_core)
 
             if respuesta:
                 if pedido.estado == "FACTURADO":
                     logger.info(f"El pedido {pedido.factura_local_uuid} fue cobrado offline. Facturando en el CORE...")
 
                     resp_factura = await core_client.post(
-                        f"/pedidos/{pedido.factura_local_uuid}/facturar",
+                        f"/api/v1/pedidos/{pedido.factura_local_uuid}/facturar",
                         json={"empleado_id": pedido.empleado_id}
                     )
 
@@ -105,7 +102,8 @@ async def procesar_movimientos_pendientes(session: Session):
             "motivo": mov.motivo
         }
 
-        respuesta = await core_client.post("/inventario/movimiento", json=payload_core)
+        # CORE API is now prefixed with /api/v1
+        respuesta = await core_client.post("/api/v1/inventario/movimiento", json=payload_core)
 
         if respuesta:
             mov.estado_sincronizacion = "COMPLETADO"

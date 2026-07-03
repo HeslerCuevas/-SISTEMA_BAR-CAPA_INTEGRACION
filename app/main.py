@@ -22,10 +22,9 @@ from app.api.routers import (
     pedidos,
     empleados,
     inventario,
-    reportes,
     auth_clientes,
     movil_mesas,
-    pedidos_movil
+    promociones
 )
 from app.services.sync_service import procesar_pedidos_pendientes, procesar_movimientos_pendientes
 
@@ -120,9 +119,8 @@ app.include_router(productos.router, prefix="/api/v1")
 app.include_router(pedidos.router, prefix="/api/v1")
 app.include_router(empleados.router, prefix="/api/v1")
 app.include_router(inventario.router, prefix="/api/v1")
-app.include_router(reportes.router, prefix="/api/v1")
 app.include_router(movil_mesas.router, prefix="/api/v1")
-app.include_router(pedidos_movil.router, prefix="/api/v1")
+app.include_router(promociones.router, prefix="/api/v1")
 
 
 @app.get("/login-token-check", include_in_schema=False)

@@ -42,6 +42,9 @@ class Sucursal(SQLModel, table=True):
 
     id: int = Field(sa_column=Column("Id", Integer, primary_key=True, autoincrement=False))
     nombre: str = Field(sa_column=Column("Nombre", String(100), nullable=False))
+    # New fields matching updated CORE
+    direccion: Optional[str] = Field(default=None, sa_column=Column("Direccion", String(255), nullable=True))
+    activo: bool = Field(default=True, sa_column=Column("Activo", Boolean, server_default=text("1"), nullable=False))
 
     empleados: List["Empleado"] = Relationship(back_populates="sucursal")
     inventarios: List["InventarioLocal"] = Relationship(back_populates="sucursal")
@@ -56,9 +59,11 @@ class Empleado(SQLModel, table=True):
     sucursal_id: int = Field(sa_column=Column("SucursalId", Integer, ForeignKey("Cache.Sucursales.Id"), nullable=False))
     documento_identidad: str = Field(sa_column=Column("DocumentoIdentidad", String(20), nullable=False))
     nombre_completo: str = Field(sa_column=Column("NombreCompleto", String(150), nullable=False))
+    # Renamed from Gmail to Email to match updated CORE (CORE field is Email, unique, not null)
+    email: Optional[str] = Field(default=None, sa_column=Column("Email", String(150), nullable=True))
     password_hash: str = Field(sa_column=Column("PasswordHash", String(255), nullable=False))
     activo: bool = Field(default=True, sa_column=Column("Activo", Boolean, server_default=text("1"), nullable=False))
-    gmail: Optional[str] = Field(default=None, sa_column=Column("Gmail", String(150)))
+
     rol: Rol = Relationship(back_populates="empleados")
     sucursal: Sucursal = Relationship(back_populates="empleados")
     pedidos_offline: List["PedidoOffline"] = Relationship(back_populates="empleado")
@@ -71,7 +76,15 @@ class Cliente(SQLModel, table=True):
     id: int = Field(sa_column=Column("Id", Integer, primary_key=True, autoincrement=False))
     nombre_completo: str = Field(sa_column=Column("NombreCompleto", String(150), nullable=False))
     email: str = Field(sa_column=Column("Email", String(150), nullable=False))
+    # New fields matching updated CORE
+    telefono: Optional[str] = Field(default=None, sa_column=Column("Telefono", String(20), nullable=True))
+    fecha_registro: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column("FechaRegistro", DateTime, server_default=text("SYSDATETIME()"), nullable=True)
+    )
+    activo: bool = Field(default=True, sa_column=Column("Activo", Boolean, server_default=text("1"), nullable=False))
     password_hash: str = Field(sa_column=Column("PasswordHash", String(255), nullable=False))
+    # Loyalty points managed by Integration only (not in CORE); retained for gateway business logic
     puntos_lealtad: int = Field(default=0,
                                 sa_column=Column("PuntosLealtad", Integer, server_default=text("0"), nullable=False))
 
@@ -109,6 +122,8 @@ class Impuesto(SQLModel, table=True):
     id: int = Field(sa_column=Column("Id", Integer, primary_key=True, autoincrement=False))
     nombre: str = Field(sa_column=Column("Nombre", String(50), nullable=False))
     tasa_porcentaje: Decimal = Field(sa_column=Column("TasaPorcentaje", Numeric(5, 2), nullable=False))
+    # New field matching updated CORE
+    activo: bool = Field(default=True, sa_column=Column("Activo", Boolean, server_default=text("1"), nullable=False))
 
     productos: List["Producto"] = Relationship(back_populates="impuesto")
 
@@ -119,6 +134,9 @@ class Categoria(SQLModel, table=True):
 
     id: int = Field(sa_column=Column("Id", Integer, primary_key=True, autoincrement=False))
     nombre: str = Field(sa_column=Column("Nombre", String(100), nullable=False))
+    # New fields matching updated CORE
+    descripcion: Optional[str] = Field(default=None, sa_column=Column("Descripcion", String(255), nullable=True))
+    activo: bool = Field(default=True, sa_column=Column("Activo", Boolean, server_default=text("1"), nullable=False))
 
     productos: List["Producto"] = Relationship(back_populates="categoria")
 
@@ -134,18 +152,26 @@ class Producto(SQLModel, table=True):
     sku: str = Field(sa_column=Column("SKU", String(50), nullable=False))
     nombre: str = Field(sa_column=Column("Nombre", String(150), nullable=False))
     precio_base: Decimal = Field(sa_column=Column("PrecioBase", Numeric(12, 2), nullable=False))
-    es_inventariable: bool = Field(default=True, sa_column=Column("EsInventariable", Boolean, server_default=text("1"),
-                                                                  nullable=False))
+    # Replaces old EsInventariable (bit). Values: PRODUCTO | INGREDIENTES | NINGUNO
+    tipo_control_inventario: str = Field(
+        default="PRODUCTO",
+        sa_column=Column("TipoControlInventario", String(20), server_default=text("'PRODUCTO'"), nullable=False)
+    )
     activo: bool = Field(default=True, sa_column=Column("Activo", Boolean, server_default=text("1"), nullable=False))
-
-    categoria: Categoria = Relationship(back_populates="productos")
-    impuesto: Impuesto = Relationship(back_populates="productos")
     imagen_url: Optional[str] = Field(
         default=None,
         sa_column=Column("ImagenURL", String(1000), nullable=True)
     )
+
+    categoria: Categoria = Relationship(back_populates="productos")
+    impuesto: Impuesto = Relationship(back_populates="productos")
     inventarios: List["InventarioLocal"] = Relationship(back_populates="producto")
     detalles_pedido: List["DetallePedidoOffline"] = Relationship(back_populates="producto")
+
+    @property
+    def es_inventariable(self) -> bool:
+        """Backward-compat property: True when inventory tracking is active (unit or ingredient-based)."""
+        return self.tipo_control_inventario in ("PRODUCTO", "INGREDIENTES")
 
 
 class InventarioLocal(SQLModel, table=True):
@@ -195,13 +221,13 @@ class PedidoOffline(SQLModel, table=True):
                                          sa_column=Column("IntentosSincronizacion", Integer, server_default=text("0"),
                                                           nullable=False))
     ultimo_error: Optional[str] = Field(default=None, sa_column=Column("UltimoError", String))
+    propina_extra: Decimal = Field(default=Decimal("0.0"),
+                                   sa_column=Column("PropinaExtra", Numeric(12, 2), server_default=text("0"),
+                                                    nullable=False))
 
     empleado: Optional[Empleado] = Relationship(back_populates="pedidos_offline")
     cliente: Optional[Cliente] = Relationship(back_populates="pedidos_offline")
     detalles: List["DetallePedidoOffline"] = Relationship(back_populates="pedido")
-    propina_extra: Decimal = Field(default=Decimal("0.0"),
-                                   sa_column=Column("PropinaExtra", Numeric(12, 2), server_default=text("0"),
-                                                    nullable=False))
 
 
 class DetallePedidoOffline(SQLModel, table=True):
@@ -258,3 +284,81 @@ class MovimientoOffline(SQLModel, table=True):
 
     empleado: Optional[Empleado] = Relationship()
     producto: Optional[Producto] = Relationship()
+
+
+class PromocionCache(SQLModel, table=True):
+    """Cached promotion catalog from CORE. Includes eligibility config when applicable."""
+    __tablename__ = "Promociones"
+    __table_args__ = {"schema": "Cache"}
+
+    id: int = Field(sa_column=Column("Id", Integer, primary_key=True, autoincrement=False))
+    nombre: str = Field(sa_column=Column("Nombre", String(150), nullable=False))
+    tipo_aplicacion: str = Field(default="AUTOMATICA", sa_column=Column("TipoAplicacion", String(20), nullable=False, server_default=text("'AUTOMATICA'")))
+    tipo_descuento: str = Field(sa_column=Column("TipoDescuento", String(20), nullable=False))
+    valor: Decimal = Field(sa_column=Column("Valor", Numeric(12, 2), nullable=False))
+    aplica_a: str = Field(default="TODOS", sa_column=Column("AplicaA", String(20), nullable=False, server_default=text("'TODOS'")))
+    aplica_happy_hour: bool = Field(default=False, sa_column=Column("AplicaHappyHour", Boolean, server_default=text("0"), nullable=False))
+    hora_inicio_hh: Optional[str] = Field(default=None, sa_column=Column("HoraInicioHH", String(5), nullable=True))
+    hora_fin_hh: Optional[str] = Field(default=None, sa_column=Column("HoraFinHH", String(5), nullable=True))
+    fecha_inicio: datetime = Field(sa_column=Column("FechaInicio", DateTime, nullable=False))
+    fecha_fin: Optional[datetime] = Field(default=None, sa_column=Column("FechaFin", DateTime, nullable=True))
+    activo: bool = Field(default=True, sa_column=Column("Activo", Boolean, server_default=text("1"), nullable=False))
+    prioridad: int = Field(default=0, sa_column=Column("Prioridad", Integer, nullable=False, server_default=text("0")))
+    etiqueta_identificador: Optional[str] = Field(default=None, sa_column=Column("EtiquetaIdentificador", String(100), nullable=True))
+    requiere_identificador: bool = Field(default=True, sa_column=Column("RequiereIdentificador", Boolean, server_default=text("1"), nullable=False))
+    precio_minimo_final: Optional[Decimal] = Field(default=None, sa_column=Column("PrecioMinimoFinal", Numeric(12, 2), nullable=True))
+    ultima_sincronizacion: datetime = Field(default_factory=datetime.now, sa_column=Column("UltimaSincronizacion", DateTime, server_default=text("SYSDATETIME()"), nullable=False))
+
+
+class CodigoPromocionalCache(SQLModel, table=True):
+    """Cached promo codes for offline validation."""
+    __tablename__ = "Codigos_Promocionales"
+    __table_args__ = {"schema": "Cache"}
+
+    id: int = Field(sa_column=Column("Id", Integer, primary_key=True, autoincrement=False))
+    promocion_id: int = Field(sa_column=Column("PromocionId", Integer, ForeignKey("Cache.Promociones.Id"), nullable=False))
+    codigo: str = Field(sa_column=Column("Codigo", String(50), nullable=False))
+    fecha_inicio: datetime = Field(sa_column=Column("FechaInicio", DateTime, nullable=False))
+    fecha_fin: Optional[datetime] = Field(default=None, sa_column=Column("FechaFin", DateTime, nullable=True))
+    uso_maximo: Optional[int] = Field(default=None, sa_column=Column("UsoMaximo", Integer, nullable=True))
+    usos_actuales: int = Field(default=0, sa_column=Column("UsosActuales", Integer, nullable=False, server_default=text("0")))
+    activo: bool = Field(default=True, sa_column=Column("Activo", Boolean, server_default=text("1"), nullable=False))
+
+
+class AplicacionPromocionOffline(SQLModel, table=True):
+    """Offline queue for promotion audit records pending upload to CORE."""
+    __tablename__ = "Aplicaciones_Promocion_Offline"
+    __table_args__ = {"schema": "Sync"}
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, sa_column=Column("Id", UNIQUEIDENTIFIER, primary_key=True))
+    promocion_id: Optional[int] = Field(default=None, sa_column=Column("PromocionId", Integer, nullable=True))
+    nombre_promocion_snap: str = Field(sa_column=Column("NombrePromocionSnap", String(150), nullable=False))
+    tipo_aplicacion: str = Field(sa_column=Column("TipoAplicacion", String(20), nullable=False))
+    factura_uuid: Optional[uuid.UUID] = Field(default=None, sa_column=Column("FacturaUUID", UNIQUEIDENTIFIER, nullable=True))
+    empleado_id: Optional[int] = Field(default=None, sa_column=Column("EmpleadoId", Integer, ForeignKey("Cache.Empleados.Id"), nullable=True))
+    empleado_autorizador_id: Optional[int] = Field(default=None, sa_column=Column("EmpleadoAutorizadorId", Integer, ForeignKey("Cache.Empleados.Id"), nullable=True))
+    cliente_id: Optional[int] = Field(default=None, sa_column=Column("ClienteId", Integer, ForeignKey("Cache.Clientes.Id"), nullable=True))
+    identificador_capturado: Optional[str] = Field(default=None, sa_column=Column("IdentificadorCapturado", String(255), nullable=True))
+    monto_descuento: Decimal = Field(default=Decimal("0"), sa_column=Column("MontoDescuento", Numeric(12, 2), nullable=False, server_default=text("0")))
+    terminal: Optional[str] = Field(default=None, sa_column=Column("Terminal", String(50), nullable=True))
+    fecha_hora: datetime = Field(default_factory=datetime.now, sa_column=Column("FechaHora", DateTime, nullable=False, server_default=text("SYSDATETIME()")))
+    notas: Optional[str] = Field(default=None, sa_column=Column("Notas", String(500), nullable=True))
+    estado_sincronizacion: str = Field(default="PENDIENTE", sa_column=Column("EstadoSincronizacion", String(20), nullable=False, server_default=text("'PENDIENTE'")))
+    intentos_sincronizacion: int = Field(default=0, sa_column=Column("IntentosSincronizacion", Integer, nullable=False, server_default=text("0")))
+    ultimo_error: Optional[str] = Field(default=None, sa_column=Column("UltimoError", String, nullable=True))
+
+class SupervisorSessionOffline(SQLModel, table=True):
+    """Offline queue for supervisor authorization sessions pending upload to CORE."""
+    __tablename__ = "SupervisorSessionOffline"
+    __table_args__ = {"schema": "Sync"}
+
+    id: uuid.UUID = Field(sa_column=Column("id", UNIQUEIDENTIFIER, primary_key=True))
+    supervisor_id: int = Field(sa_column=Column("supervisor_id", Integer, ForeignKey("Cache.Empleados.Id"), nullable=False))
+    cajero_id: int = Field(sa_column=Column("cajero_id", Integer, ForeignKey("Cache.Empleados.Id"), nullable=False))
+    terminal: str = Field(sa_column=Column("terminal", String(50), nullable=False))
+    inicio: datetime = Field(sa_column=Column("inicio", DateTime, nullable=False))
+    fin: datetime = Field(sa_column=Column("fin", DateTime, nullable=False))
+    motivo_fin: str = Field(sa_column=Column("motivo_fin", String(50), nullable=False))
+    estado_sincronizacion: str = Field(default="PENDIENTE", sa_column=Column("estado_sincronizacion", String(20), nullable=False, server_default=text("'PENDIENTE'")))
+    intentos_sincronizacion: int = Field(default=0, sa_column=Column("intentos_sincronizacion", Integer, nullable=False, server_default=text("0")))
+    ultimo_error: Optional[str] = Field(default=None, sa_column=Column("ultimo_error", String, nullable=True))

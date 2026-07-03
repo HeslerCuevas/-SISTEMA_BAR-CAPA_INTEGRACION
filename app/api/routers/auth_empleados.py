@@ -14,7 +14,8 @@ from app.core.config import settings
 logger = logging.getLogger("AuthRouter")
 router = APIRouter(prefix="/auth", tags=["Autenticación"])
 
-CORE_AUTH_URL = "http://localhost:8000/api/v1/auth/login"
+# Built from settings so CORE_URL in .env is the single source of truth
+CORE_AUTH_URL = f"{settings.CORE_URL}/api/v1/auth/login"
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -60,7 +61,7 @@ async def login(
 
     statement = select(Empleado).where(
         or_(
-            Empleado.gmail == form_data.username,
+            Empleado.email == form_data.username,
             Empleado.documento_identidad == form_data.username
         )
     )
@@ -70,14 +71,20 @@ async def login(
         if not empleado_local:
             empleado_local = Empleado(
                 id=core_data["empleado_id"],
-                gmail=form_data.username,
+                email=form_data.username,
                 nombre_completo=core_data["nombre"],
-                activo=core_data["activo"]
+                activo=core_data["activo"],
+                # These fields are required by the model; fallback to empty strings until next full sync
+                documento_identidad="",
+                password_hash="",
+                rol_id=0,
+                sucursal_id=core_data.get("sucursal_id", 1)
             )
             db.add(empleado_local)
         else:
             empleado_local.nombre_completo = core_data["nombre"]
             empleado_local.activo = core_data["activo"]
+            empleado_local.email = form_data.username
 
         db.commit()
         db.refresh(empleado_local)

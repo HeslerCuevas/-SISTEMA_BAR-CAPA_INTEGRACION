@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Response, BackgroundTasks
 from sqlmodel import Session, select
 from typing import List
 import logging
-from datetime import datetime
+from app.core.timezone import get_local_now
 
 from app.db.database import get_session, engine
 from app.clients.core_client import core_client
@@ -42,11 +42,14 @@ def sincronizar_cache_productos(core_data: list):
                     select(Producto).where(Producto.id == item.get("id"))
                 ).first()
 
+                # CORE now uses tipo_control_inventario instead of es_inventariable
+                tipo_control = item.get("tipo_control_inventario", "PRODUCTO")
+
                 if prod_local:
                     prod_local.sku = item.get("sku", prod_local.sku)
                     prod_local.nombre = item.get("nombre")
                     prod_local.precio_base = item.get("precio_base")
-                    prod_local.es_inventariable = item.get("es_inventariable", True)
+                    prod_local.tipo_control_inventario = tipo_control
                     prod_local.imagen_url = item.get("imagen_url")
                     prod_local.categoria_id = cat_id if cat_id else prod_local.categoria_id
                     prod_local.impuesto_id = imp_id if imp_id else prod_local.impuesto_id
@@ -61,12 +64,13 @@ def sincronizar_cache_productos(core_data: list):
                         nombre=item.get("nombre"),
                         precio_base=item.get("precio_base"),
                         imagen_url=item.get("imagen_url"),
-                        es_inventariable=item.get("es_inventariable", True),
+                        tipo_control_inventario=tipo_control,
                     )
                     db_background.add(nuevo_prod)
                     prod_nuevos += 1
 
-                if item.get("es_inventariable", True):
+                # Inventariable when tipo_control_inventario is PRODUCTO or INGREDIENTES (not NINGUNO)
+                if item.get("tipo_control_inventario", "PRODUCTO") != "NINGUNO":
                     inv_local = db_background.exec(
                         select(InventarioLocal).where(
                             InventarioLocal.producto_id == item.get("id"),
@@ -78,7 +82,7 @@ def sincronizar_cache_productos(core_data: list):
 
                     if inv_local:
                         inv_local.cantidad_disponible = stock_fresco
-                        inv_local.ultima_sincronizacion = datetime.utcnow()
+                        inv_local.ultima_sincronizacion = get_local_now()
                         db_background.add(inv_local)
                         inv_actualizados += 1
                     else:
@@ -86,7 +90,7 @@ def sincronizar_cache_productos(core_data: list):
                             producto_id=item.get("id"),
                             sucursal_id=settings.SUCURSAL_ID,
                             cantidad_disponible=stock_fresco,
-                            ultima_sincronizacion=datetime.utcnow()
+                            ultima_sincronizacion=get_local_now()
                         )
                         db_background.add(nuevo_inv)
                         inv_nuevos += 1
@@ -139,7 +143,7 @@ async def obtener_categorias(
 ):
     logger.info("Solicitando categorias de menú (Acceso Público)")
 
-    core_data = await core_client.get("/productos/categorias")
+    core_data = await core_client.get("/api/v1/productos/categorias")
 
     if core_data is not None:
         response.headers["X-Data-Source"] = "CORE"
@@ -179,7 +183,7 @@ async def obtener_productos_por_categoria(
 ):
     logger.info(f"Solicitando productos de cat {categoria_id} (Acceso Público)")
 
-    core_data = await core_client.get(f"/productos/por-categoria/{categoria_id}")
+    core_data = await core_client.get(f"/api/v1/productos/por-categoria/{categoria_id}")
 
     if core_data is not None:
         response.headers["X-Data-Source"] = "CORE"
@@ -231,7 +235,7 @@ async def obtener_catalogo(
 ):
     logger.info("Solicitando catálogo completo (Acceso Público)")
 
-    core_data = await core_client.get("/productos/")
+    core_data = await core_client.get("/api/v1/productos/")
 
     if core_data is not None:
         response.headers["X-Data-Source"] = "CORE"
@@ -273,3 +277,42 @@ async def obtener_catalogo(
                 )
             )
         return resultados
+
+
+# ─── GET single product (POS: stock check before adding to order) ─────────────
+
+@router.get("/{producto_id}", response_model=ProductoResponse)
+async def obtener_producto(
+        producto_id: int,
+        response: Response,
+        db: Session = Depends(get_session)
+):
+    """Returns a single product. Tries CORE first; falls back to local cache."""
+    core_data = await core_client.get(f"/api/v1/productos/{producto_id}")
+
+    if core_data is not None and "detail" not in core_data:
+        response.headers["X-Data-Source"] = "CORE"
+        return ProductoResponse(
+            id=core_data.get("id"),
+            nombre=core_data.get("nombre"),
+            precio_base=core_data.get("precio_base"),
+            cantidad_disponible=core_data.get("cantidad_disponible", 0),
+            origen_datos="CORE",
+            imagen_url=core_data.get("imagen_url"),
+            id_categoria=core_data.get("categoria_id")
+        )
+
+    response.headers["X-Data-Source"] = "CACHE_LOCAL"
+    prod_local = db.get(Producto, producto_id)
+    if not prod_local:
+        raise HTTPException(status_code=404, detail="Producto no encontrado.")
+
+    return ProductoResponse(
+        id=prod_local.id,
+        nombre=prod_local.nombre,
+        precio_base=float(prod_local.precio_base),
+        cantidad_disponible=99,
+        origen_datos="CACHE_LOCAL",
+        imagen_url=prod_local.imagen_url,
+        id_categoria=prod_local.categoria_id
+    )

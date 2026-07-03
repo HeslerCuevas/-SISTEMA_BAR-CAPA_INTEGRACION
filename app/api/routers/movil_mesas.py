@@ -11,7 +11,7 @@ from app.schemas.mesas_schema import (
 )
 
 logger = logging.getLogger("RouterMesasGateway")
-router = APIRouter(prefix="/clientes/mesas", tags=["App Móvil - Mesas y QR"])
+router = APIRouter(prefix="/mesas", tags=["Gestión de Mesas"])
 
 
 @router.post("/vincular", response_model=MesaVincularResponse)
@@ -22,7 +22,7 @@ async def vincular_mesa_movil(
 ):
     logger.info(f"Cliente escaneó QR de la Mesa {request.numero_mesa}")
 
-    core_data = await core_client.post("/mesas/vincular", json=request.model_dump())
+    core_data = await core_client.post("/api/v1/mesas/vincular", json=request.model_dump())
 
     if core_data is not None and "detail" not in core_data:
         response.headers["X-Data-Source"] = "CORE"
@@ -60,7 +60,7 @@ async def llamar_mesero_movil(
         request: LlamarMeseroRequest,
         response: Response
 ):
-    core_data = await core_client.post(f"/mesas/{numero_mesa}/llamar-mesero", json=request.model_dump())
+    core_data = await core_client.post(f"/api/v1/mesas/{numero_mesa}/llamar-mesero", json=request.model_dump())
 
     if core_data is not None and "detail" not in core_data:
         response.headers["X-Data-Source"] = "CORE"

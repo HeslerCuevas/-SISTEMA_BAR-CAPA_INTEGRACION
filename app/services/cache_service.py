@@ -8,37 +8,54 @@ logger = logging.getLogger("CacheService")
 
 async def sincronizar_productos_desde_core(db: Session):
     try:
-        impuestos_core = await core_client.get("/productos/impuestos")
+        # All CORE endpoints are now prefixed with /api/v1
+        impuestos_core = await core_client.get("/api/v1/productos/impuestos", params={"incluir_inactivos": "true"})
         if impuestos_core:
             for i in impuestos_core:
                 stmt = select(Impuesto).where(Impuesto.id == i['id'])
                 imp_local = db.exec(stmt).first()
                 if not imp_local:
-                    db.add(Impuesto(id=i['id'], nombre=i['nombre'], tasa_porcentaje=i['tasa_porcentaje']))
+                    db.add(Impuesto(
+                        id=i['id'],
+                        nombre=i['nombre'],
+                        tasa_porcentaje=i['tasa_porcentaje'],
+                        activo=i.get('activo', True)
+                    ))
                 else:
                     imp_local.nombre = i['nombre']
                     imp_local.tasa_porcentaje = i['tasa_porcentaje']
+                    imp_local.activo = i.get('activo', True)
             db.commit()
             logger.info("Caché de Impuestos actualizada.")
 
-        categorias_core = await core_client.get("/productos/categorias")
+        categorias_core = await core_client.get("/api/v1/productos/categorias", params={"incluir_inactivas": "true"})
         if categorias_core:
             for c in categorias_core:
                 stmt = select(Categoria).where(Categoria.id == c['id'])
                 cat_local = db.exec(stmt).first()
                 if not cat_local:
-                    db.add(Categoria(id=c['id'], nombre=c['nombre']))
+                    db.add(Categoria(
+                        id=c['id'],
+                        nombre=c['nombre'],
+                        descripcion=c.get('descripcion'),
+                        activo=c.get('activo', True)
+                    ))
                 else:
                     cat_local.nombre = c['nombre']
+                    cat_local.descripcion = c.get('descripcion')
+                    cat_local.activo = c.get('activo', True)
             db.commit()
             logger.info("Caché de Categorías actualizada.")
 
-        productos_core = await core_client.get("/productos/")
+        productos_core = await core_client.get("/api/v1/productos/", params={"solo_activos": "false"})
         if productos_core:
             contador_p = 0
             for p in productos_core:
                 stmt = select(Producto).where(Producto.id == p['id'])
                 prod_local = db.exec(stmt).first()
+
+                # CORE now uses tipo_control_inventario instead of es_inventariable
+                tipo_control = p.get('tipo_control_inventario', 'PRODUCTO')
 
                 if not prod_local:
                     nuevo_p = Producto(
@@ -48,7 +65,7 @@ async def sincronizar_productos_desde_core(db: Session):
                         sku=p['sku'],
                         nombre=p['nombre'],
                         precio_base=p['precio_base'],
-                        es_inventariable=p.get('es_inventariable', True),
+                        tipo_control_inventario=tipo_control,
                         activo=p.get('activo', True),
                         imagen_url=p.get('imagen_url')
                     )
@@ -58,6 +75,7 @@ async def sincronizar_productos_desde_core(db: Session):
                     prod_local.precio_base = p['precio_base']
                     prod_local.imagen_url = p.get('imagen_url')
                     prod_local.activo = p.get('activo', True)
+                    prod_local.tipo_control_inventario = tipo_control
 
                 contador_p += 1
 
@@ -74,7 +92,7 @@ async def sincronizar_productos_desde_core(db: Session):
 
 async def sincronizar_catalogos_base(db: Session):
     try:
-        roles_core = await core_client.get("/roles/")
+        roles_core = await core_client.get("/api/v1/roles/")
         if roles_core:
             for r in roles_core:
                 stmt = select(Rol).where(Rol.id == r['id'])
@@ -84,14 +102,23 @@ async def sincronizar_catalogos_base(db: Session):
                     db.add(nuevo_rol)
             db.commit()
 
-        suc_core = await core_client.get("/sucursales/")
+        suc_core = await core_client.get("/api/v1/sucursales/")
         if suc_core:
             for s in suc_core:
                 stmt = select(Sucursal).where(Sucursal.id == s['id'])
                 existe = db.exec(stmt).first()
                 if not existe:
-                    nueva_suc = Sucursal(id=s['id'], nombre=s['nombre'])
+                    nueva_suc = Sucursal(
+                        id=s['id'],
+                        nombre=s['nombre'],
+                        direccion=s.get('direccion'),
+                        activo=s.get('activo', True)
+                    )
                     db.add(nueva_suc)
+                else:
+                    existe.nombre = s['nombre']
+                    existe.direccion = s.get('direccion')
+                    existe.activo = s.get('activo', True)
             db.commit()
 
         return True
@@ -105,7 +132,7 @@ async def sincronizar_catalogos_base(db: Session):
 async def sincronizar_personal_desde_core(db: Session):
     try:
         await sincronizar_catalogos_base(db)
-        empleados_core = await core_client.get("/empleados/")
+        empleados_core = await core_client.get("/api/v1/empleados/sync", params={"incluir_inactivos": "true"})
 
         if empleados_core is None:
             return {"status": "error", "mensaje": "CORE apagado o inalcanzable."}
@@ -123,7 +150,8 @@ async def sincronizar_personal_desde_core(db: Session):
                 empleado_local.sucursal_id = emp_data["sucursal_id"]
                 empleado_local.password_hash = emp_data["password_hash"]
                 empleado_local.activo = emp_data["activo"]
-                empleado_local.gmail = emp_data.get("email")
+                # CORE field is now 'email' (renamed from 'gmail')
+                empleado_local.email = emp_data.get("email")
                 contador_actualizados += 1
             else:
                 nuevo_empleado = Empleado(
@@ -134,7 +162,7 @@ async def sincronizar_personal_desde_core(db: Session):
                     nombre_completo=emp_data["nombre_completo"],
                     password_hash=emp_data["password_hash"],
                     activo=emp_data.get("activo", True),
-                    gmail=emp_data.get("email")
+                    email=emp_data.get("email")
                 )
                 db.add(nuevo_empleado)
                 contador_nuevos += 1

@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
+from sqlalchemy import func
 import logging
 import uuid
 from datetime import datetime
+from app.core.timezone import get_local_now
 
 from app.db.database import get_session
 from app.clients.core_client import core_client
-from app.models.integration_models import MovimientoOffline, InventarioLocal
+from app.models.integration_models import MovimientoOffline, InventarioLocal, DetallePedidoOffline, PedidoOffline
 from app.api.deps import get_current_user_payload
 from app.schemas.inventario_schemas import MovimientoCreate
 from app.core.config import settings
@@ -23,13 +25,36 @@ async def consultar_stock(
 ):
     logger.info(f"Consulta de stock para producto {producto_id} por {usuario.get('sub')}")
 
-    stock_core = await core_client.get(f"/inventario/{producto_id}")
+    stock_core = await core_client.get(f"/api/v1/inventario/{producto_id}")
 
     if stock_core:
+        core_stock = int(stock_core.get("cantidad_disponible", 0))
+
+        # ── Stock Race-Condition Fix ────────────────────────────────────────────────────
+        # CORE's stock is authoritative, but it doesn't yet know about orders
+        # that CAJA_NEW has processed locally but haven't been synced yet.
+        # Subtract pending deductions so CAJA doesn't over-sell.
+        pending_result = db.exec(
+            select(func.sum(DetallePedidoOffline.cantidad))
+            .select_from(DetallePedidoOffline)
+            .join(
+                PedidoOffline,
+                DetallePedidoOffline.factura_local_uuid == PedidoOffline.factura_local_uuid
+            )
+            .where(
+                DetallePedidoOffline.producto_id == producto_id,
+                ~PedidoOffline.estado_sincronizacion.in_(["COMPLETADO", "CANCELADO"])
+            )
+        ).first()
+
+        pending_deductions = int(pending_result) if pending_result is not None else 0
+        adjusted_stock = max(0, core_stock - pending_deductions)
+
         return {
             "producto_id": producto_id,
-            "stock": stock_core.get("cantidad_disponible", 0),
-            "fuente": "CORE"
+            "stock": adjusted_stock,
+            "fuente": "CORE" if pending_deductions == 0 else "CORE_AJUSTADO_LOCAL",
+            "descuento_pendiente": pending_deductions
         }
 
     inv_local = db.exec(
@@ -67,7 +92,7 @@ async def registrar_movimiento(
             cantidad=movimiento.cantidad,
             motivo=movimiento.motivo,
             estado_sincronizacion="PENDIENTE",
-            fecha_creacion_local=datetime.utcnow()
+            fecha_creacion_local=get_local_now()
         )
         db.add(nuevo_movimiento)
 
@@ -84,14 +109,14 @@ async def registrar_movimiento(
             elif movimiento.tipo_movimiento == "SALIDA":
                 inv_local.cantidad_disponible -= movimiento.cantidad
 
-            inv_local.ultima_sincronizacion = datetime.utcnow()
+            inv_local.ultima_sincronizacion = get_local_now()
             db.add(inv_local)
         else:
             nuevo_inv = InventarioLocal(
                 producto_id=movimiento.producto_id,
                 sucursal_id=settings.SUCURSAL_ID,
                 cantidad_disponible=movimiento.cantidad if movimiento.tipo_movimiento == "ENTRADA" else 0,
-                ultima_sincronizacion=datetime.utcnow()
+                ultima_sincronizacion=get_local_now()
             )
             db.add(nuevo_inv)
 
@@ -107,7 +132,7 @@ async def registrar_movimiento(
             "movimiento_local_uuid": str(nuevo_movimiento.id)
         }
 
-        respuesta_core = await core_client.post("/inventario/movimiento", json=payload_core)
+        respuesta_core = await core_client.post("/api/v1/inventario/movimiento", json=payload_core)
 
         if respuesta_core:
             nuevo_movimiento.estado_sincronizacion = "COMPLETADO"

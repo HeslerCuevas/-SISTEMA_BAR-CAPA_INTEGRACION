@@ -16,7 +16,7 @@ router = APIRouter(prefix="/clientes/pedidos", tags=["App Móvil - Gestión Din�
 
 async def sync_agregar_items_al_core(factura_local_uuid: uuid.UUID, payload: dict):
     try:
-        await core_client.patch(f"/pedidos/{factura_local_uuid}/agregar-items", json=payload)
+        await core_client.patch(f"/api/v1/pedidos/{factura_local_uuid}/agregar-items", json=payload)
         logger.info(f"Sincronización exitosa de items adicionales para {factura_local_uuid}")
     except Exception as e:
         logger.error(f"Fallo al sincronizar items con CORE: {e}")
@@ -24,7 +24,7 @@ async def sync_agregar_items_al_core(factura_local_uuid: uuid.UUID, payload: dic
 
 async def sync_estado_pedido_core(factura_local_uuid: uuid.UUID, payload: dict):
     try:
-        await core_client.post(f"/pedidos/{factura_local_uuid}/solicitar-cuenta", json=payload)
+        await core_client.post(f"/api/v1/pedidos/{factura_local_uuid}/solicitar-cuenta", json=payload)
     except Exception as e:
         logger.error(f"Fallo al notificar cierre al CORE: {e}")
 
@@ -128,7 +128,7 @@ async def solicitar_cuenta_gateway(
     payload_para_core = payload.model_dump(mode='json')
 
     await core_client.post(
-        f"/pedidos/{factura_local_uuid}/solicitar-cuenta",
+        f"/api/v1/pedidos/{factura_local_uuid}/solicitar-cuenta",
         json=payload_para_core
     )
 
