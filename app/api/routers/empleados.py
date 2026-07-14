@@ -53,7 +53,7 @@ async def obtener_empleados_locales(
         resultado.append({
             "id": emp.id,
             "nombre_completo": emp.nombre_completo,
-            "gmail": emp.gmail,
+            "email": emp.email,
             "hash_clave": emp.password_hash
         })
 

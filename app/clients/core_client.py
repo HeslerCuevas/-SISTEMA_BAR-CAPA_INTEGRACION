@@ -67,7 +67,16 @@ class CoreClient:
                     f"[OUTBOX PATTERN] CORE inalcanzable. El dato (POST) deberá guardarse en el búfer local.")
                 return None
             except httpx.HTTPStatusError as e:
-                logger.error(f"[ERROR CORE] POST a {url} falló con estado {e.response.status_code}: {e.response.text}")
+                status_code = e.response.status_code
+                # For 4xx errors, return the response body so callers can surface the detail to the client.
+                # For 5xx errors, treat as CORE unavailable.
+                if 400 <= status_code < 500:
+                    logger.warning(f"[ERROR CORE] POST a {url} error de negocio {status_code}: {e.response.text}")
+                    try:
+                        return e.response.json()
+                    except Exception:
+                        return {"detail": e.response.text}
+                logger.error(f"[ERROR CORE] POST a {url} falló con estado {status_code}: {e.response.text}")
                 return None
             except Exception as e:
                 logger.critical(f"[ERROR CRÍTICO] Fallo inesperado en POST: {str(e)}")
@@ -93,7 +102,14 @@ class CoreClient:
                     f"[OUTBOX PATTERN] CORE inalcanzable. El dato (PATCH) deberá guardarse en el búfer local.")
                 return None
             except httpx.HTTPStatusError as e:
-                logger.error(f"[ERROR CORE] PATCH a {url} falló con estado {e.response.status_code}: {e.response.text}")
+                status_code = e.response.status_code
+                if 400 <= status_code < 500:
+                    logger.warning(f"[ERROR CORE] PATCH a {url} error de negocio {status_code}: {e.response.text}")
+                    try:
+                        return e.response.json()
+                    except Exception:
+                        return {"detail": e.response.text}
+                logger.error(f"[ERROR CORE] PATCH a {url} falló con estado {status_code}: {e.response.text}")
                 return None
             except Exception as e:
                 logger.critical(f"[ERROR CRÍTICO] Fallo inesperado en PATCH: {str(e)}")
@@ -118,7 +134,14 @@ class CoreClient:
                 logger.warning(f"[OUTBOX PATTERN] CORE inalcanzable (PUT).")
                 return None
             except httpx.HTTPStatusError as e:
-                logger.error(f"[ERROR CORE] PUT a {url} falló con estado {e.response.status_code}: {e.response.text}")
+                status_code = e.response.status_code
+                if 400 <= status_code < 500:
+                    logger.warning(f"[ERROR CORE] PUT a {url} error de negocio {status_code}: {e.response.text}")
+                    try:
+                        return e.response.json()
+                    except Exception:
+                        return {"detail": e.response.text}
+                logger.error(f"[ERROR CORE] PUT a {url} falló con estado {status_code}: {e.response.text}")
                 return None
             except Exception as e:
                 logger.critical(f"[ERROR CRÍTICO] Fallo inesperado en PUT: {str(e)}")

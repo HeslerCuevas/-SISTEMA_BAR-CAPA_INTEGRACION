@@ -42,6 +42,9 @@ async def registrar_cliente_movil(
             detail="No hay conexión con el servidor central para crear cuentas nuevas. Intente más tarde."
         )
     if "detail" in core_response:
+        # Forward the exact detail and its natural HTTP status code so the mobile app
+        # can distinguish errors (e.g. 400 email-already-registered vs validation errors).
+        # The CORE uses 400 for all registration business-rule violations.
         raise HTTPException(status_code=400, detail=core_response["detail"])
 
     cliente_id = core_response.get("cliente_id")
@@ -81,7 +84,12 @@ async def login_cliente_movil(
         return ClienteLoginResponse(**core_response)
 
     if core_response is not None and "detail" in core_response:
-        raise HTTPException(status_code=401, detail=core_response["detail"])
+        detail = core_response["detail"]
+        # CORE returns 403 for inactive accounts with a distinguishable prefix.
+        # Forward it so Flutter can show the reactivation prompt.
+        if "CUENTA_INACTIVA" in str(detail):
+            raise HTTPException(status_code=403, detail=detail)
+        raise HTTPException(status_code=401, detail=detail)
 
     logger.warning("[FALLBACK] CORE inaccesible. Validando credenciales en SQL Server Local.")
     response.headers["X-Data-Source"] = "CACHE_LOCAL"
@@ -93,6 +101,13 @@ async def login_cliente_movil(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Email o contraseña incorrectos (Validación Local)"
+        )
+
+    # Local fallback inactive check
+    if not cliente_local.activo:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="CUENTA_INACTIVA: Esta cuenta ha sido desactivada. Solicita la reactivación desde la app."
         )
 
     datos_token = {
@@ -193,4 +208,138 @@ async def confirmar_reset_cliente(
         raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
     if "detail" in core_response:
         raise HTTPException(status_code=400, detail=core_response["detail"])
-    return core_response
+    return core_response
+
+
+# ─── Actualizar perfil (nombre) ─────────────────────────────────────────────────
+
+@router.put("/perfil")
+async def actualizar_perfil_cliente(
+        request: Request,
+        db: Session = Depends(get_session),
+        usuario: dict = Depends(get_current_user_payload)
+):
+    """Proxy al CORE. Actualiza el nombre del cliente. Sincroniza el caché local."""
+    body = await request.json()
+    core_response = await core_client.put(
+        "/api/v1/clientes/auth/perfil",
+        json=body,
+        headers={"Authorization": request.headers.get("Authorization", "")}
+    )
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+    if "detail" in core_response:
+        raise HTTPException(status_code=400, detail=core_response["detail"])
+
+    # Sync local cache with the new name
+    nuevo_nombre = core_response.get("nombre_completo")
+    if nuevo_nombre:
+        cliente_id = int(usuario.get("sub"))
+        cliente_local = db.get(Cliente, cliente_id)
+        if cliente_local:
+            cliente_local.nombre_completo = nuevo_nombre
+            db.add(cliente_local)
+            db.commit()
+
+    return core_response
+
+
+# ─── Solicitar cambio de email ─────────────────────────────────────────────────
+
+@router.post("/solicitar-cambio-email")
+async def solicitar_cambio_email(
+        request: Request,
+        usuario: dict = Depends(get_current_user_payload)
+):
+    """Proxy al CORE. Inicia el flujo de cambio de email con doble confirmación."""
+    body = await request.json()
+    core_response = await core_client.post(
+        "/api/v1/clientes/auth/solicitar-cambio-email",
+        json=body,
+        headers={"Authorization": request.headers.get("Authorization", "")}
+    )
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+    if "detail" in core_response:
+        raise HTTPException(status_code=400, detail=core_response["detail"])
+    return core_response
+
+
+# ─── Solicitar eliminación de cuenta ──────────────────────────────────────────
+
+@router.post("/solicitar-eliminacion")
+async def solicitar_eliminacion_cuenta(
+        request: Request,
+        usuario: dict = Depends(get_current_user_payload)
+):
+    """Proxy al CORE. Envía email de confirmación de eliminación de cuenta."""
+    body = await request.json()
+    core_response = await core_client.post(
+        "/api/v1/clientes/auth/solicitar-eliminacion",
+        json=body,
+        headers={"Authorization": request.headers.get("Authorization", "")}
+    )
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+    if "detail" in core_response:
+        raise HTTPException(status_code=400, detail=core_response["detail"])
+    return core_response
+
+
+# ─── Solicitar reactivación de cuenta ─────────────────────────────────────────
+
+@router.post("/reactivar")
+async def solicitar_reactivacion_cuenta(
+        request: Request
+):
+    """Proxy al CORE. No requiere autenticación (la cuenta está inactiva)."""
+    body = await request.json()
+    core_response = await core_client.post("/api/v1/clientes/auth/reactivar", json=body)
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+    return core_response
+
+
+# ─── Confirmar cambio de email ────────────────────────────────────────────────
+
+@router.post("/confirmar-cambio-email")
+async def confirmar_cambio_email(
+        request: Request
+):
+    body = await request.json()
+    core_response = await core_client.post("/api/v1/clientes/auth/confirmar-cambio-email", json=body)
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+    if "detail" in core_response:
+        raise HTTPException(status_code=400, detail=core_response["detail"])
+    return core_response
+
+
+# ─── Confirmar eliminación de cuenta ──────────────────────────────────────────
+
+@router.post("/confirmar-eliminacion")
+async def confirmar_eliminacion_cuenta(
+        request: Request
+):
+    body = await request.json()
+    core_response = await core_client.post("/api/v1/clientes/auth/confirmar-eliminacion", json=body)
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+    if "detail" in core_response:
+        raise HTTPException(status_code=400, detail=core_response["detail"])
+    return core_response
+
+
+# ─── Confirmar reactivación de cuenta ─────────────────────────────────────────
+
+@router.post("/confirmar-reactivacion")
+async def confirmar_reactivacion_cuenta(
+        request: Request
+):
+    body = await request.json()
+    core_response = await core_client.post("/api/v1/clientes/auth/confirmar-reactivacion", json=body)
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+    if "detail" in core_response:
+        raise HTTPException(status_code=400, detail=core_response["detail"])
+    return core_response
