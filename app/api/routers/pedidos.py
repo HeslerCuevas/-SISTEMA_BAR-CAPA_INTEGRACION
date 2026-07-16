@@ -15,7 +15,7 @@ from app.schemas.pedidos_schema import (
 )
 from app.models.integration_models import PedidoOffline, DetallePedidoOffline, DispositivoCliente, MovimientoOffline
 from app.clients.core_client import core_client
-from app.services.fcm_service import enviar_notificacion_pago
+from app.services.fcm_service import enviar_notificacion_pago, enviar_notificacion_pago_rechazado
 
 logger = logging.getLogger("RouterPedidos")
 router = APIRouter(prefix="/pedidos", tags=["Ventas y Pedidos"])
@@ -273,35 +273,27 @@ async def facturar_pedido(
         raise HTTPException(status_code=404, detail="Order not found in the Gateway.")
 
     if pedido.estado == "FACTURADO":
+        # Billing is idempotent. Retry the success notification in case the
+        # first FCM delivery failed transiently.
+        if pedido.cliente_id:
+            dispositivo = db.exec(
+                select(DispositivoCliente).where(DispositivoCliente.cliente_id == pedido.cliente_id)
+            ).first()
+            if dispositivo and dispositivo.fcm_token:
+                background_tasks.add_task(
+                    enviar_notificacion_pago,
+                    dispositivo.fcm_token,
+                    str(factura_local_uuid),
+                )
         return {
             "mensaje": "El pedido ya se encontraba facturado.",
-            "sync": pedido.estado_sincronizacion
+            "sync": pedido.estado_sincronizacion,
+            "payment_status": "PAID",
         }
-
-    pedido.estado = "FACTURADO"
-    # Preserve COMPLETADO state if the order was already pushed to CORE by crear_pedido's inline sync.
-    # Only mark PENDIENTE if we haven't synced yet.
-    if pedido.estado_sincronizacion not in ("COMPLETADO",):
-        pedido.estado_sincronizacion = "PENDIENTE"
-
-    db.add(pedido)
-    db.commit()
-    db.refresh(pedido)
-
-    if pedido.cliente_id:
-        dispositivo = db.exec(
-            select(DispositivoCliente).where(DispositivoCliente.cliente_id == pedido.cliente_id)
-        ).first()
-
-        if dispositivo and dispositivo.fcm_token:
-            background_tasks.add_task(
-                enviar_notificacion_pago,
-                dispositivo.fcm_token,
-                str(factura_local_uuid)
-            )
 
     empleado_id = usuario.get("sub")
     if not empleado_id:
+        raise HTTPException(status_code=401, detail="The cashier session does not contain a valid employee id. Payment was not completed.")
         # Token missing sub — bill locally and queue for later sync
         logger.warning(f"[FACTURAR] Token sin 'sub' para pedido {factura_local_uuid}. Modo offline.")
         return {
@@ -312,6 +304,14 @@ async def facturar_pedido(
     try:
         empleado_id_int = int(empleado_id)
 
+        if pedido.estado == "CANCELADO":
+            raise HTTPException(status_code=409, detail="A rejected order cannot be paid.")
+        if pedido.estado != "POR_FACTURAR":
+            raise HTTPException(
+                status_code=409,
+                detail="The customer has not requested payment for this order yet.",
+            )
+
         # ── Step 1: ensure the order exists in CORE before trying to bill it ──
         # Without this, CORE returns 404 when /facturar is called immediately
         # after POST /pedidos/ because the background sync hasn't run yet.
@@ -319,6 +319,13 @@ async def facturar_pedido(
             logger.info(f"[INVOICE] Order {factura_local_uuid} is not yet in CORE. Sending now...")
             pushed = await _push_pedido_to_core(pedido, db)
             if not pushed:
+                pedido.ultimo_error = "CORE unavailable or rejected the order before billing."
+                db.add(pedido)
+                db.commit()
+                raise HTTPException(
+                    status_code=503,
+                    detail="CORE could not accept the order. Payment was not completed; try again.",
+                )
                 logger.warning(f"[INVOICE] Could not send {factura_local_uuid} to CORE. Offline mode.")
                 return {
                     "mensaje": "Pedido facturado localmente. El CORE no está disponible, se reintentará.",
@@ -333,20 +340,52 @@ async def facturar_pedido(
         )
 
         if respuesta_core is not None and "detail" not in respuesta_core:
+            pedido.estado = "FACTURADO"
             pedido.estado_sincronizacion = "COMPLETADO"
+            pedido.ultimo_error = None
             db.add(pedido)
             db.commit()
 
+            if pedido.cliente_id:
+                dispositivo = db.exec(
+                    select(DispositivoCliente).where(DispositivoCliente.cliente_id == pedido.cliente_id)
+                ).first()
+                if dispositivo and dispositivo.fcm_token:
+                    background_tasks.add_task(
+                        enviar_notificacion_pago,
+                        dispositivo.fcm_token,
+                        str(factura_local_uuid),
+                    )
+
             return {
                 "mensaje": "Pedido facturado exitosamente y sincronizado en tiempo real.",
-                "sync": "COMPLETADO"
+                "sync": "COMPLETADO",
+                "payment_status": "PAID",
             }
 
         error_detail = respuesta_core.get("detail", "Respuesta inesperada") if respuesta_core else "CORE no respondió"
         logger.error(f"[INVOICE] CORE rejected /facturar for {factura_local_uuid}: {error_detail}")
+        pedido.ultimo_error = str(error_detail)[:1000]
+        db.add(pedido)
+        db.commit()
+        core_status = respuesta_core.get("_status_code") if respuesta_core else None
+        status_code = core_status if isinstance(core_status, int) and 400 <= core_status < 500 else 503
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"Payment was not completed: {error_detail}",
+        )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"[INVOICE] Synchronization failed with CORE for {factura_local_uuid}: {e}")
+        pedido.ultimo_error = str(e)[:1000]
+        db.add(pedido)
+        db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail="Payment could not be completed. The order remains open; try again.",
+        )
 
     return {
         "mensaje": "Pedido facturado exitosamente (Modo Offline). El sistema lo enviará a la nube en breve.",
@@ -356,6 +395,7 @@ async def facturar_pedido(
 @router.post("/{factura_local_uuid}/cancelar")
 async def cancelar_pedido(
         factura_local_uuid: uuid.UUID,
+        background_tasks: BackgroundTasks,
         db: Session = Depends(get_session),
         usuario: dict = Depends(get_current_user_payload)
 ):
@@ -364,12 +404,29 @@ async def cancelar_pedido(
     if not pedido:
         raise HTTPException(status_code=404, detail="Order not found in the Integration Layer.")
 
-    if pedido.estado_sincronizacion == "CANCELADO":
-        return {"mensaje": "El pedido ya estaba cancelado localmente."}
+    if pedido.estado == "CANCELADO":
+        return {"mensaje": "El pedido ya estaba cancelado localmente.", "payment_status": "REJECTED"}
 
+    if pedido.estado == "FACTURADO":
+        raise HTTPException(status_code=409, detail="A paid order cannot be rejected.")
+
+    # Estado is the business state shown to CAJA/mobile.  EstadoSincronizacion
+    # only tracks whether the mutation reached CORE; they must not be mixed.
+    pedido.estado = "CANCELADO"
     pedido.estado_sincronizacion = "CANCELADO"
     db.add(pedido)
     db.commit()
+
+    if pedido.cliente_id:
+        dispositivo = db.exec(
+            select(DispositivoCliente).where(DispositivoCliente.cliente_id == pedido.cliente_id)
+        ).first()
+        if dispositivo and dispositivo.fcm_token:
+            background_tasks.add_task(
+                enviar_notificacion_pago_rechazado,
+                dispositivo.fcm_token,
+                str(factura_local_uuid),
+            )
 
     empleado_id = usuario.get("sub")
     try:
@@ -382,14 +439,18 @@ async def cancelar_pedido(
             pedido.estado_sincronizacion = "COMPLETADO"
             db.add(pedido)
             db.commit()
-            return {"mensaje": f"Pedido {factura_local_uuid} cancelado en local y sincronizado con CORE."}
+            return {
+                "mensaje": f"Pedido {factura_local_uuid} cancelado en local y sincronizado con CORE.",
+                "payment_status": "REJECTED",
+            }
 
     except Exception as e:
         logger.error(f"Error notifying CORE of cancellation: {e}")
 
     return {
         "mensaje": "Pedido cancelado localmente. El CORE no respondió, se reintentará la sincronización.",
-        "core_notificado": False
+        "core_notificado": False,
+        "payment_status": "REJECTED"
     }
 
 @router.get("/pendientes", response_model=List[dict])
@@ -407,6 +468,11 @@ async def obtener_pedidos_pendientes_caja(
 
     resultado = []
     for pedido in pedidos_pendientes:
+        detalles = db.exec(
+            select(DetallePedidoOffline).where(
+                DetallePedidoOffline.factura_local_uuid == pedido.factura_local_uuid
+            )
+        ).all()
         resultado.append({
             "factura_local_uuid": str(pedido.factura_local_uuid),
             "mesa": pedido.mesa if pedido.mesa else "Para Llevar / Barra",
@@ -417,7 +483,22 @@ async def obtener_pedidos_pendientes_caja(
             "propina_legal": str(pedido.propina_legal),
             "propina_extra": str(pedido.propina_extra),
             "total_general": str(pedido.total_general),
-            "fecha_creacion": pedido.fecha_creacion_local.strftime('%Y-%m-%d %H:%M')
+            "fecha_creacion": pedido.fecha_creacion_local.isoformat(),
+            # Return a consistent snapshot so CAJA does not need a second,
+            # racy request before opening an order.
+            "items": [
+                {
+                    "detalle_local_uuid": str(detalle.detalle_local_uuid),
+                    "producto_id": detalle.producto_id,
+                    "producto_nombre": detalle.producto.nombre if detalle.producto else f"Product {detalle.producto_id}",
+                    "cantidad": detalle.cantidad,
+                    "precio_unitario_historico": float(detalle.precio_unitario_historico),
+                    "impuesto_historico": float(detalle.impuesto_historico),
+                    "monto_impuesto": float(detalle.monto_impuesto),
+                    "subtotal_linea": float(detalle.subtotal_linea),
+                }
+                for detalle in detalles
+            ],
         })
 
     return resultado
@@ -448,6 +529,7 @@ async def obtener_detalle_pedido_para_caja(
             {
                 "detalle_local_uuid": str(detalle.detalle_local_uuid),
                 "producto_id": detalle.producto_id,
+                "producto_nombre": detalle.producto.nombre if detalle.producto else f"Product {detalle.producto_id}",
                 "cantidad": detalle.cantidad,
                 "precio_unitario_historico": detalle.precio_unitario_historico,
                 "impuesto_historico": detalle.impuesto_historico,
@@ -491,7 +573,7 @@ async def resumen_cuenta(
 
     return ResumenCuentaResponse(
         factura_local_uuid=pedido.factura_local_uuid,
-        estado_cuenta=pedido.estado_sincronizacion,
+        estado_cuenta=pedido.estado,
         subtotal_acumulado=pedido.subtotal,
         total_impuestos_acumulado=pedido.total_impuestos,
         propina_legal_acumulada=pedido.propina_legal,

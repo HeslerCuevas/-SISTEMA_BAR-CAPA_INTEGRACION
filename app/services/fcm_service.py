@@ -16,7 +16,29 @@ def enviar_notificacion_pago(token_fcm: str, factura_uuid: str):
         data={
             "action": "ORDER_PAID",
             "factura_uuid": str(factura_uuid),
+            "payment_status": "PAID",
         },
+        android=messaging.AndroidConfig(
+            priority="high",
+            notification=messaging.AndroidNotification(
+                title="Payment confirmed",
+                body="Your table order has been paid. Thank you for visiting.",
+                channel_id="order_updates",
+            ),
+        ),
+        apns=messaging.APNSConfig(
+            headers={"apns-priority": "10"},
+            payload=messaging.APNSPayload(
+                aps=messaging.Aps(
+                    alert=messaging.ApsAlert(
+                        title="Payment confirmed",
+                        body="Your table order has been paid. Thank you for visiting.",
+                    ),
+                    sound="default",
+                    content_available=True,
+                ),
+            ),
+        ),
         token=token_fcm,
     )
     try:
@@ -30,4 +52,42 @@ def enviar_notificacion_pago(token_fcm: str, factura_uuid: str):
             factura_uuid,
             exc,
         )
+        return None
+
+
+def enviar_notificacion_pago_rechazado(token_fcm: str, factura_uuid: str):
+    """Tell the mobile app that CAJA rejected the payment request."""
+    message = messaging.Message(
+        data={
+            "action": "ORDER_PAYMENT_FAILED",
+            "factura_uuid": str(factura_uuid),
+            "payment_status": "REJECTED",
+        },
+        android=messaging.AndroidConfig(
+            priority="high",
+            notification=messaging.AndroidNotification(
+                title="Payment unsuccessful",
+                body="The bar rejected this table order. Please contact your server.",
+                channel_id="order_updates",
+            ),
+        ),
+        apns=messaging.APNSConfig(
+            headers={"apns-priority": "10"},
+            payload=messaging.APNSPayload(
+                aps=messaging.Aps(
+                    alert=messaging.ApsAlert(
+                        title="Payment unsuccessful",
+                        body="The bar rejected this table order. Please contact your server.",
+                    ),
+                    sound="default",
+                    content_available=True,
+                )
+            ),
+        ),
+        token=token_fcm,
+    )
+    try:
+        return messaging.send(message)
+    except Exception as exc:
+        logger.warning("Payment rejection notification failed for %s: %s", factura_uuid, exc)
         return None

@@ -2,7 +2,11 @@ import pytest
 import uuid
 from decimal import Decimal
 from fastapi.testclient import TestClient
+from unittest.mock import AsyncMock, patch
 from app.models.integration_models import PedidoOffline, DetallePedidoOffline
+from app import main
+from app.api.deps import get_current_user_payload
+from app.clients.core_client import core_client
 
 def test_forzar_sincronizacion_pedidos(client: TestClient):
     # This should trigger the sync service and return immediately, trying to push offline data to core
@@ -109,3 +113,70 @@ def test_active_tables_order_detail_includes_mobile_line_items(client: TestClien
             "subtotal_linea": 118.0,
         }
     ]
+
+
+def test_facturar_only_marks_paid_after_core_accepts(client: TestClient, db_session):
+    """A CORE success is required before Caja/mobile can see a paid order."""
+    pedido_uuid = uuid.uuid4()
+    pedido = PedidoOffline(
+        factura_local_uuid=pedido_uuid,
+        canal_origen="MOVIL",
+        mesa=12,
+        subtotal=Decimal("100.00"),
+        total_impuestos=Decimal("18.00"),
+        total_general=Decimal("128.00"),
+        estado="POR_FACTURAR",
+        estado_sincronizacion="COMPLETADO",
+    )
+    db_session.add(pedido)
+    db_session.commit()
+
+    main.app.dependency_overrides[get_current_user_payload] = lambda: {"sub": "77", "canal": "CAJA"}
+    try:
+        with patch.object(core_client, "post", new=AsyncMock(return_value={"estado": "FACTURADO"})):
+            response = client.post(f"/api/v1/pedidos/{pedido_uuid}/facturar")
+    finally:
+        main.app.dependency_overrides.pop(get_current_user_payload, None)
+
+    assert response.status_code == 200
+    assert response.json()["payment_status"] == "PAID"
+    db_session.expire_all()
+    saved = db_session.get(PedidoOffline, pedido_uuid)
+    assert saved.estado == "FACTURADO"
+
+
+@pytest.mark.parametrize(
+    "core_result, expected_status",
+    [
+        ({"detail": "Order is already cancelled", "_status_code": 400}, 400),
+        (None, 503),
+    ],
+)
+def test_facturar_keeps_order_open_when_core_rejects_or_is_unavailable(
+    client: TestClient, db_session, core_result, expected_status
+):
+    pedido_uuid = uuid.uuid4()
+    pedido = PedidoOffline(
+        factura_local_uuid=pedido_uuid,
+        canal_origen="MOVIL",
+        mesa=12,
+        subtotal=Decimal("100.00"),
+        total_impuestos=Decimal("18.00"),
+        total_general=Decimal("128.00"),
+        estado="POR_FACTURAR",
+        estado_sincronizacion="COMPLETADO",
+    )
+    db_session.add(pedido)
+    db_session.commit()
+
+    main.app.dependency_overrides[get_current_user_payload] = lambda: {"sub": "77", "canal": "CAJA"}
+    try:
+        with patch.object(core_client, "post", new=AsyncMock(return_value=core_result)):
+            response = client.post(f"/api/v1/pedidos/{pedido_uuid}/facturar")
+    finally:
+        main.app.dependency_overrides.pop(get_current_user_payload, None)
+
+    assert response.status_code == expected_status
+    db_session.expire_all()
+    saved = db_session.get(PedidoOffline, pedido_uuid)
+    assert saved.estado == "POR_FACTURAR"
