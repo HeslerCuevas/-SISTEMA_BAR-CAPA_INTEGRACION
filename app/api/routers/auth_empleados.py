@@ -23,7 +23,7 @@ async def login(
         form_data: OAuth2PasswordRequestForm = Depends(),
         db: Session = Depends(get_session)
 ):
-    print(f"Intentando login para el usuario: '{form_data.username}'")
+    print(f"Attempting login for user: '{form_data.username}'")
 
     core_online = False
     core_data = None
@@ -45,9 +45,9 @@ async def login(
             if response.status_code == 200:
                 core_online = True
                 core_data = response.json()
-                print("Conexión con CORE exitosa. Credenciales validadas remotamente.")
+                print("Connection to CORE successful. Credentials validated remotely.")
             elif response.status_code in [401, 403]:
-                print(f"CORE rechazó el acceso: HTTP {response.status_code}")
+                print(f"CORE rejected access: HTTP {response.status_code}")
                 # Si el CORE devuelve error, extraemos el detalle
                 err_detail = response.json().get("detail", "Acceso denegado por el servidor central.")
                 raise HTTPException(
@@ -55,7 +55,7 @@ async def login(
                     detail=err_detail
                 )
     except httpx.RequestError as e:
-        print(f"⚠️ CORE inalcanzable, procediendo con validación Offline (Local Cache): {e}")
+        print(f"⚠️ CORE unreachable, proceeding with offline validation (local cache): {e}")
     except HTTPException:
         raise
 
@@ -90,7 +90,7 @@ async def login(
         db.refresh(empleado_local)
 
     if not empleado_local:
-        print(f"No se encontró registro local para: '{form_data.username}'")
+        print(f"No local record found for: '{form_data.username}'")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User or Password invalid."
@@ -98,17 +98,17 @@ async def login(
 
     if not core_online:
         if not verify_password(form_data.password, empleado_local.password_hash):
-            print(f"Password incorrecto para: {form_data.username}")
+            print(f"Incorrect password for: {form_data.username}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="User or Password invalid."
             )
 
     if not empleado_local.activo:
-        print(f"Intento de login de usuario inactivo: {form_data.username}")
+        print(f"Login attempt by inactive user: {form_data.username}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="El usuario está inactivo en el sistema."
+            detail="The user is inactive in the system."
         )
 
     access_token = create_access_token(
@@ -116,7 +116,7 @@ async def login(
         canal="CAJA"
     )
 
-    print(f"Login exitoso. Generando token para ID: {empleado_local.id}")
+    print(f"Login successful. Generating token for ID: {empleado_local.id}")
 
     rol_final = "Cajero"
     if core_online:

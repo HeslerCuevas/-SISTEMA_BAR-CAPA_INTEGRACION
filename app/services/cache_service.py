@@ -26,7 +26,7 @@ async def sincronizar_productos_desde_core(db: Session):
                     imp_local.tasa_porcentaje = i['tasa_porcentaje']
                     imp_local.activo = i.get('activo', True)
             db.commit()
-            logger.info("Caché de Impuestos actualizada.")
+            logger.info("Tax cache updated.")
 
         categorias_core = await core_client.get("/api/v1/productos/categorias", params={"incluir_inactivas": "true"})
         if categorias_core:
@@ -45,7 +45,7 @@ async def sincronizar_productos_desde_core(db: Session):
                     cat_local.descripcion = c.get('descripcion')
                     cat_local.activo = c.get('activo', True)
             db.commit()
-            logger.info("Caché de Categorías actualizada.")
+            logger.info("Category cache updated.")
 
         productos_core = await core_client.get("/api/v1/productos/", params={"solo_activos": "false"})
         if productos_core:
@@ -80,14 +80,14 @@ async def sincronizar_productos_desde_core(db: Session):
                 contador_p += 1
 
             db.commit()
-            logger.info(f"Sincronización de {contador_p} productos completada exitosamente.")
+            logger.info(f"Synchronization of {contador_p} products completed successfully.")
             return {"status": "success", "total": contador_p}
 
         return {"status": "warning", "mensaje": "No se recibieron productos del CORE."}
 
     except Exception as e:
         db.rollback()
-        logger.error(f"Error en la cascada de sincronización: {str(e)}")
+        logger.error(f"Error in synchronization cascade: {str(e)}")
         return {"status": "error", "mensaje": str(e)}
 
 async def sincronizar_catalogos_base(db: Session):
@@ -124,7 +124,7 @@ async def sincronizar_catalogos_base(db: Session):
         return True
     except Exception as e:
         db.rollback()
-        logger.error(f"Error sincronizando catálogos base: {e}")
+        logger.error(f"Error synchronizing base catalogs: {e}")
         return False
 
 
@@ -175,5 +175,5 @@ async def sincronizar_personal_desde_core(db: Session):
 
     except Exception as e:
         db.rollback()
-        logger.error(f"Fallo en sync de empleados: {str(e)}")
+        logger.error(f"Employee synchronization failed: {str(e)}")
         return {"status": "error", "mensaje": f"Error interno: {str(e)}"}

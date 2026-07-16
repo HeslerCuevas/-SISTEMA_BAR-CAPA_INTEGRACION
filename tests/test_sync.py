@@ -66,3 +66,46 @@ def test_procesar_movimientos_offline_direct_db(db_session):
 
     assert pedido.estado_sincronizacion == "PENDIENTE"
     assert pedido.factura_local_uuid == pedido_uuid
+
+
+def test_active_tables_order_detail_includes_mobile_line_items(client: TestClient, db_session):
+    """CAJA must receive mobile order items after selecting an active table."""
+    pedido_uuid = uuid.uuid4()
+    pedido = PedidoOffline(
+        factura_local_uuid=pedido_uuid,
+        canal_origen="MOVIL",
+        mesa=12,
+        subtotal=Decimal("100.00"),
+        total_impuestos=Decimal("18.00"),
+        total_general=Decimal("128.00"),
+        estado="POR_FACTURAR",
+    )
+    detalle = DetallePedidoOffline(
+        factura_local_uuid=pedido_uuid,
+        producto_id=321,
+        cantidad=2,
+        precio_unitario_historico=Decimal("50.00"),
+        impuesto_historico=Decimal("18.00"),
+        monto_impuesto=Decimal("18.00"),
+        subtotal_linea=Decimal("118.00"),
+    )
+    db_session.add(pedido)
+    db_session.add(detalle)
+    db_session.commit()
+
+    response = client.get(f"/api/v1/pedidos/{pedido_uuid}")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["canal_origen"] == "MOVIL"
+    assert data["items"] == [
+        {
+            "detalle_local_uuid": str(detalle.detalle_local_uuid),
+            "producto_id": 321,
+            "cantidad": 2,
+            "precio_unitario_historico": 50.0,
+            "impuesto_historico": 18.0,
+            "monto_impuesto": 18.0,
+            "subtotal_linea": 118.0,
+        }
+    ]

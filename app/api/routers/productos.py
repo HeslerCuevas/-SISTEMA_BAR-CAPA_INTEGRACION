@@ -100,7 +100,7 @@ def sincronizar_cache_productos(core_data: list):
                 f"[CACHE REFRESH] Sincronización exitosa. Productos (N:{prod_nuevos}, A:{prod_actualizados}) | Inventario (N:{inv_nuevos}, A:{inv_actualizados})")
 
         except Exception as e:
-            logger.error(f"[ERROR CACHE] Falló la sincronización doble: {str(e)}")
+            logger.error(f"[CACHE ERROR] Dual synchronization failed: {str(e)}")
             db_background.rollback()
 
 
@@ -128,10 +128,10 @@ def sincronizar_cache_categorias(core_data: list):
                     cat_nuevas += 1
 
             db_background.commit()
-            logger.info(f"[CACHE REFRESH] Sincronización exitosa. Categorias (N:{cat_nuevas}, A:{cat_actualizadas})")
+            logger.info(f"[CACHE REFRESH] Synchronization successful. Categories (N:{cat_nuevas}, A:{cat_actualizadas})")
 
         except Exception as e:
-            logger.error(f"[ERROR CACHE] Falló la sincronización de categorías: {str(e)}")
+            logger.error(f"[CACHE ERROR] Category synchronization failed: {str(e)}")
             db_background.rollback()
 
 
@@ -141,7 +141,7 @@ async def obtener_categorias(
         background_tasks: BackgroundTasks,
         db: Session = Depends(get_session)
 ):
-    logger.info("Solicitando categorias de menú (Acceso Público)")
+    logger.info("Requesting menu categories (public access)")
 
     core_data = await core_client.get("/api/v1/productos/categorias")
 
@@ -159,7 +159,7 @@ async def obtener_categorias(
         ]
     else:
         response.headers["X-Data-Source"] = "CACHE_LOCAL"
-        logger.warning("[FALLBACK] CORE inaccesible. Sirviendo categorías desde SQL Server Local.")
+        logger.warning("[FALLBACK] CORE unreachable. Serving categories from local SQL Server.")
 
         statement = select(Categoria)
         categorias_locales = db.exec(statement).all()
@@ -181,7 +181,7 @@ async def obtener_productos_por_categoria(
         background_tasks: BackgroundTasks,
         db: Session = Depends(get_session)
 ):
-    logger.info(f"Solicitando productos de cat {categoria_id} (Acceso Público)")
+    logger.info(f"Requesting products for category {categoria_id} (public access)")
 
     core_data = await core_client.get(f"/api/v1/productos/por-categoria/{categoria_id}")
 
@@ -206,7 +206,7 @@ async def obtener_productos_por_categoria(
         return resultados
     else:
         response.headers["X-Data-Source"] = "CACHE_LOCAL"
-        logger.warning(f"[FALLBACK] CORE inaccesible. Sirviendo productos cat {categoria_id} desde Local.")
+        logger.warning(f"[FALLBACK] CORE unreachable. Serving category {categoria_id} products from local storage.")
 
         statement = select(Producto).where(Producto.categoria_id == categoria_id)
         productos_locales = db.exec(statement).all()
@@ -233,7 +233,7 @@ async def obtener_catalogo(
         background_tasks: BackgroundTasks,
         db: Session = Depends(get_session)
 ):
-    logger.info("Solicitando catálogo completo (Acceso Público)")
+    logger.info("Requesting complete catalog (public access)")
 
     core_data = await core_client.get("/api/v1/productos/")
 
@@ -258,7 +258,7 @@ async def obtener_catalogo(
 
     else:
         response.headers["X-Data-Source"] = "CACHE_LOCAL"
-        logger.warning("[FALLBACK] CORE inaccesible. Sirviendo catálogo desde SQL Server Local.")
+        logger.warning("[FALLBACK] CORE unreachable. Serving catalog from local SQL Server.")
 
         statement = select(Producto)
         productos_locales = db.exec(statement).all()
@@ -305,7 +305,7 @@ async def obtener_producto(
     response.headers["X-Data-Source"] = "CACHE_LOCAL"
     prod_local = db.get(Producto, producto_id)
     if not prod_local:
-        raise HTTPException(status_code=404, detail="Producto no encontrado.")
+        raise HTTPException(status_code=404, detail="Product not found.")
 
     return ProductoResponse(
         id=prod_local.id,

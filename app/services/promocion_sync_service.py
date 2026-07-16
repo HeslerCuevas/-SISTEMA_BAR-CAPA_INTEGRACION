@@ -131,7 +131,7 @@ async def sincronizar_promociones_desde_core(db: Session, token: Optional[str] =
                             db.add(c_obj)
                         stats["codigos"] += 1
                     except Exception as e:
-                        logger.error(f"Error syncing codigo {c_data.get('codigo')}: {e}")
+                        logger.error(f"Error syncing code {c_data.get('codigo')}: {e}")
                         stats["errores"] += 1
 
         db.commit()

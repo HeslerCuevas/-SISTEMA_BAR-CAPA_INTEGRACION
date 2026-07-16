@@ -20,6 +20,7 @@ from app.api.routers import (
     auth_empleados,
     productos,
     pedidos,
+    pedidos_movil,
     empleados,
     inventario,
     auth_clientes,
@@ -34,49 +35,49 @@ scheduler = AsyncIOScheduler()
 
 
 async def tarea_sincronizacion_programada():
-    print("[SCHEDULER] Despertando: Revisando bandejas de salida offline...")
+    print("[SCHEDULER] Waking up: Checking offline outboxes...")
     try:
         with Session(engine) as session:
             pedidos_ok, pedidos_fail = await procesar_pedidos_pendientes(session)
             mov_ok, mov_fail = await procesar_movimientos_pendientes(session)
 
             if pedidos_ok > 0 or pedidos_fail > 0 or mov_ok > 0 or mov_fail > 0:
-                print(f"[SCHEDULER] Reporte de Sincronización:")
-                print(f"  -> Pedidos: {pedidos_ok} subidos, {pedidos_fail} fallidos.")
-                print(f"  -> Movimientos: {mov_ok} subidos, {mov_fail} fallidos.")
+                print(f"[SCHEDULER] Synchronization report:")
+                print(f"  -> Orders: {pedidos_ok} uploaded, {pedidos_fail} failed.")
+                print(f"  -> Movements: {mov_ok} uploaded, {mov_fail} failed.")
     except Exception as e:
-        print(f"[ERROR SCHEDULER] Fallo durante la sincronización: {e}")
+        print(f"[SCHEDULER ERROR] Synchronization failed: {e}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Iniciando Gateway...")
+    print("Starting Gateway...")
 
     asyncio.create_task(auto_sync_worker())
-    print("Worker de auto-sincronización iniciado.")
+    print("Automatic synchronization worker started.")
     try:
         ruta_cert = Path("firebase-adminsdk.json")
         if ruta_cert.exists():
             cred = credentials.Certificate(str(ruta_cert))
             firebase_admin.initialize_app(cred)
-            print("Firebase Admin SDK inicializado correctamente.")
+            print("Firebase Admin SDK initialized successfully.")
         else:
-            print("ADVERTENCIA: No se encontró 'firebase-adminsdk.json'. Las notificaciones Push no funcionarán.")
+            print("WARNING: 'firebase-adminsdk.json' was not found. Push notifications will not work.")
     except Exception as e:
-        print(f"Error al inicializar Firebase: {e}")
+        print(f"Error initializing Firebase: {e}")
 
-    print("Verificando/Creando esquemas en SQL Server Local...")
+    print("Checking/creating schemas in local SQL Server...")
     SQLModel.metadata.create_all(engine)
 
-    print("Iniciando programador de tareas (Background Scheduler)...")
+    print("Starting task scheduler (Background Scheduler)...")
     scheduler.add_job(tarea_sincronizacion_programada, 'interval', seconds=10)
     scheduler.start()
 
-    print("Sistema listo y protegido.")
+    print("System ready and protected.")
 
     yield
 
-    print("Apagando Gateway y deteniendo Scheduler...")
+    print("Shutting down Gateway and stopping Scheduler...")
     scheduler.shutdown()
 
 
@@ -100,14 +101,14 @@ app.add_middleware(AuditLoggingMiddleware)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    print(f"[ERROR GLOBAL CRITICO] Fallo en la ruta {request.url.path}")
+    print(f"[CRITICAL GLOBAL ERROR] Request failed at {request.url.path}")
     traceback.print_exc()
 
     return JSONResponse(
         status_code=500,
         content={
             "status": "error",
-            "mensaje": "El Gateway experimentó un fallo interno inesperado.",
+            "mensaje": "The Gateway experienced an unexpected internal failure.",
             "detalle": str(exc)
         }
     )
@@ -117,9 +118,11 @@ app.include_router(auth_empleados.router, prefix="/api/v1")
 app.include_router(auth_clientes.router, prefix="/api/v1")
 app.include_router(productos.router, prefix="/api/v1")
 app.include_router(pedidos.router, prefix="/api/v1")
+app.include_router(pedidos_movil.router, prefix="/api/v1")
 app.include_router(empleados.router, prefix="/api/v1")
 app.include_router(inventario.router, prefix="/api/v1")
 app.include_router(movil_mesas.router, prefix="/api/v1")
+app.include_router(movil_mesas.legacy_router, prefix="/api/v1")
 app.include_router(promociones.router, prefix="/api/v1")
 
 

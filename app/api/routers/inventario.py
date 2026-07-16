@@ -23,7 +23,7 @@ async def consultar_stock(
         db: Session = Depends(get_session),
         usuario: dict = Depends(get_current_user_payload)
 ):
-    logger.info(f"Consulta de stock para producto {producto_id} por {usuario.get('sub')}")
+    logger.info(f"Stock lookup for product {producto_id} by {usuario.get('sub')}")
 
     stock_core = await core_client.get(f"/api/v1/inventario/{producto_id}")
 
@@ -65,7 +65,7 @@ async def consultar_stock(
     ).first()
 
     if not inv_local:
-        raise HTTPException(status_code=404, detail="Producto sin registro de inventario local.")
+        raise HTTPException(status_code=404, detail="Product has no local inventory record.")
 
     return {
         "producto_id": producto_id,
@@ -151,5 +151,5 @@ async def registrar_movimiento(
 
     except Exception as e:
         db.rollback()
-        logger.error(f"Error en registro de movimiento: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error interno al procesar el inventario.")
+        logger.error(f"Error recording movement: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal error processing inventory.")

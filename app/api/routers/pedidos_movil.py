@@ -17,16 +17,16 @@ router = APIRouter(prefix="/clientes/pedidos", tags=["App Móvil - Gestión Din�
 async def sync_agregar_items_al_core(factura_local_uuid: uuid.UUID, payload: dict):
     try:
         await core_client.patch(f"/api/v1/pedidos/{factura_local_uuid}/agregar-items", json=payload)
-        logger.info(f"Sincronización exitosa de items adicionales para {factura_local_uuid}")
+        logger.info(f"Successful synchronization of additional items for {factura_local_uuid}")
     except Exception as e:
-        logger.error(f"Fallo al sincronizar items con CORE: {e}")
+        logger.error(f"Failed to synchronize items with CORE: {e}")
 
 
 async def sync_estado_pedido_core(factura_local_uuid: uuid.UUID, payload: dict):
     try:
         await core_client.post(f"/api/v1/pedidos/{factura_local_uuid}/solicitar-cuenta", json=payload)
     except Exception as e:
-        logger.error(f"Fallo al notificar cierre al CORE: {e}")
+        logger.error(f"Failed to notify CORE of closure: {e}")
 
 
 
@@ -40,7 +40,7 @@ async def agregar_items_local(
     pedido = db.get(PedidoOffline, factura_local_uuid)
 
     if not pedido:
-        raise HTTPException(status_code=404, detail="Factura local no encontrada")
+        raise HTTPException(status_code=404, detail="Local invoice not found")
 
     try:
         pedido.subtotal += Decimal(str(payload.nuevo_subtotal_agregado))
@@ -81,7 +81,7 @@ async def agregar_items_local(
 async def resumen_cuenta_local(factura_local_uuid: uuid.UUID, db: Session = Depends(get_session)):
     pedido = db.get(PedidoOffline, factura_local_uuid)
     if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+        raise HTTPException(status_code=404, detail="Order not found")
 
     detalles = db.exec(
         select(DetallePedidoOffline).where(DetallePedidoOffline.factura_local_uuid == factura_local_uuid)).all()
@@ -116,7 +116,7 @@ async def solicitar_cuenta_gateway(
     pedido = db.exec(select(PedidoOffline).where(PedidoOffline.factura_local_uuid == factura_local_uuid)).first()
 
     if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+        raise HTTPException(status_code=404, detail="Order not found")
 
     pedido.propina_extra = payload.propina_extra
     pedido.total_general = pedido.subtotal + pedido.total_impuestos + pedido.propina_legal + pedido.propina_extra

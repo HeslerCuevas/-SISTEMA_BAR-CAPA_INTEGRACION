@@ -17,13 +17,13 @@ def get_token(
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="No se encontró header de Authorization",
+        detail="Authorization header not found",
     )
 
 
 def get_current_user_payload(token: str = Depends(get_token)) -> Dict[str, Any]:
-    print("\nDEPURACIÓN DE TOKEN ENTRANTE")
-    print(f"TOKEN RECIBIDO (Primeros 20 carac.): {token[:20]}...")
+    print("\nINCOMING TOKEN DEBUG")
+    print(f"RECEIVED TOKEN (first 20 characters): {token[:20]}...")
     print(f"USANDO LLAVE (Config): {settings.SECRET_KEY[:5]}...{settings.SECRET_KEY[-3:]}")
     print(f"ALGORITMO ESPERADO: {settings.ALGORITHM}")
 
@@ -38,30 +38,29 @@ def get_current_user_payload(token: str = Depends(get_token)) -> Dict[str, Any]:
         canal = payload.get("canal")
 
         if usuario_id is None or canal is None:
-            print("FALLO: El payload no tiene 'sub' o 'canal'")
-            raise HTTPException(status_code=401, detail="Token incompleto (faltan claims)")
+            print("FAILURE: Payload has no 'sub' or 'canal'")
+            raise HTTPException(status_code=401, detail="Incomplete token (claims missing)")
 
-        print("✅ TOKEN VALIDADO CORRECTAMENTE")
+        print("✅ TOKEN VALIDATED SUCCESSFULLY")
         print(f"USUARIO ID: {usuario_id} | CANAL: {canal}")
         return payload
 
     except ExpiredSignatureError:
-        print("FALLO: EL TOKEN EXPIRÓ (ExpiredSignatureError)")
+        print("FAILURE: TOKEN EXPIRED (ExpiredSignatureError)")
         raise HTTPException(
             status_code=401,
-            detail="El token ha expirado. Haz login de nuevo."
+            detail="The token has expired. Please log in again."
         )
     except JWTError as e:
-        print(f"FALLO CRÍTICO DE FIRMA (JWTError): {str(e)}")
+        print(f"CRITICAL SIGNATURE FAILURE (JWTError): {str(e)}")
 
         if "Signature verification failed" in str(e):
-            print("💡 RECOMENDACIÓN: La SECRET_KEY en el CORE y el GATEWAY no coinciden.")
+            print("💡 RECOMMENDATION: SECRET_KEY in CORE and GATEWAY do not match.")
 
         raise HTTPException(
             status_code=401,
-            detail=f"Error de validación: {str(e)}"
+            detail=f"Validation error: {str(e)}"
         )
     except Exception as e:
-        print(f"ERROR INESPERADO: {str(e)}")
-        raise HTTPException(status_code=500, detail="Error interno validando token")
-
+        print(f"UNEXPECTED ERROR: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal error validating token")

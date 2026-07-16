@@ -32,14 +32,14 @@ async def registrar_cliente_movil(
         response: Response,
         db: Session = Depends(get_session)
 ):
-    logger.info(f"Intentando registrar nuevo cliente: {request.email}")
+    logger.info(f"Attempting to register new customer: {request.email}")
 
     core_response = await core_client.post("/api/v1/clientes/auth/registro", json=request.model_dump())
 
     if core_response is None:
         raise HTTPException(
             status_code=503,
-            detail="No hay conexión con el servidor central para crear cuentas nuevas. Intente más tarde."
+            detail="There is no connection to the central server to create new accounts. Please try again later."
         )
     if "detail" in core_response:
         # Forward the exact detail and its natural HTTP status code so the mobile app
@@ -63,9 +63,10 @@ async def registrar_cliente_movil(
     response.headers["X-Data-Source"] = "CORE_AND_CACHED"
 
     return ClienteRegistroResponse(
-        mensaje="Cuenta creada y sincronizada en el bar",
+        mensaje="Account created and synchronized with the bar",
         cliente_id=cliente_id,
-        email=request.email
+        email=request.email,
+        email_verificado=core_response.get("email_verificado", False),
     )
 
 
@@ -75,7 +76,7 @@ async def login_cliente_movil(
         response: Response,
         db: Session = Depends(get_session)
 ):
-    logger.info(f"Intento de login cliente: {request.email}")
+    logger.info(f"Customer login attempt: {request.email}")
 
     core_response = await core_client.post("/api/v1/clientes/auth/login", json=request.model_dump())
 
@@ -91,7 +92,7 @@ async def login_cliente_movil(
             raise HTTPException(status_code=403, detail=detail)
         raise HTTPException(status_code=401, detail=detail)
 
-    logger.warning("[FALLBACK] CORE inaccesible. Validando credenciales en SQL Server Local.")
+    logger.warning("[FALLBACK] CORE unreachable. Validating credentials in local SQL Server.")
     response.headers["X-Data-Source"] = "CACHE_LOCAL"
 
     statement = select(Cliente).where(Cliente.email == request.email)
@@ -100,14 +101,14 @@ async def login_cliente_movil(
     if not cliente_local or not verify_password(request.password_plano, cliente_local.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Email o contraseña incorrectos (Validación Local)"
+            detail="Incorrect email or password (local validation)"
         )
 
     # Local fallback inactive check
     if not cliente_local.activo:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="CUENTA_INACTIVA: Esta cuenta ha sido desactivada. Solicita la reactivación desde la app."
+            detail="INACTIVE_ACCOUNT: This account has been deactivated. Request reactivation from the app."
         )
 
     datos_token = {
@@ -175,7 +176,7 @@ async def cambiar_password_cliente(
         headers={"Authorization": request.headers.get("Authorization", "")}
     )
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
     if "detail" in core_response:
         raise HTTPException(status_code=400, detail=core_response["detail"])
     return core_response
@@ -191,7 +192,7 @@ async def solicitar_reset_cliente(
     body = await request.json()
     core_response = await core_client.post("/api/v1/clientes/auth/solicitar-reset", json=body)
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
     return core_response
 
 
@@ -205,9 +206,62 @@ async def confirmar_reset_cliente(
     body = await request.json()
     core_response = await core_client.post("/api/v1/clientes/auth/confirmar-reset", json=body)
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
     if "detail" in core_response:
         raise HTTPException(status_code=400, detail=core_response["detail"])
+    return core_response
+
+
+@router.post("/confirmar-reset-otp")
+async def confirmar_reset_cliente_otp(
+        request: Request
+):
+    body = await request.json()
+    core_response = await core_client.post("/api/v1/clientes/auth/confirmar-reset-otp", json=body)
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
+    if "detail" in core_response:
+        raise HTTPException(status_code=400, detail=core_response["detail"])
+    return core_response
+
+
+@router.post("/solicitar-verificacion-email")
+async def solicitar_verificacion_email_cliente(
+        request: Request,
+        usuario: dict = Depends(get_current_user_payload)
+):
+    core_response = await core_client.post(
+        "/api/v1/clientes/auth/solicitar-verificacion-email",
+        headers={"Authorization": request.headers.get("Authorization", "")}
+    )
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
+    if "detail" in core_response:
+        raise HTTPException(
+            status_code=core_response.get("_status_code", 400),
+            detail=core_response["detail"],
+        )
+    return core_response
+
+
+@router.post("/verificar-email")
+async def verificar_email_cliente(
+        request: Request,
+        usuario: dict = Depends(get_current_user_payload)
+):
+    body = await request.json()
+    core_response = await core_client.post(
+        "/api/v1/clientes/auth/verificar-email",
+        json=body,
+        headers={"Authorization": request.headers.get("Authorization", "")}
+    )
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
+    if "detail" in core_response:
+        raise HTTPException(
+            status_code=core_response.get("_status_code", 400),
+            detail=core_response["detail"],
+        )
     return core_response
 
 
@@ -227,7 +281,7 @@ async def actualizar_perfil_cliente(
         headers={"Authorization": request.headers.get("Authorization", "")}
     )
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
     if "detail" in core_response:
         raise HTTPException(status_code=400, detail=core_response["detail"])
 
@@ -259,9 +313,30 @@ async def solicitar_cambio_email(
         headers={"Authorization": request.headers.get("Authorization", "")}
     )
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
     if "detail" in core_response:
         raise HTTPException(status_code=400, detail=core_response["detail"])
+    return core_response
+
+
+@router.post("/solicitar-cambio-email-otp")
+async def solicitar_cambio_email_otp(
+        request: Request,
+        usuario: dict = Depends(get_current_user_payload)
+):
+    body = await request.json()
+    core_response = await core_client.post(
+        "/api/v1/clientes/auth/solicitar-cambio-email-otp",
+        json=body,
+        headers={"Authorization": request.headers.get("Authorization", "")}
+    )
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
+    if "detail" in core_response:
+        raise HTTPException(
+            status_code=core_response.get("_status_code", 400),
+            detail=core_response["detail"],
+        )
     return core_response
 
 
@@ -280,7 +355,7 @@ async def solicitar_eliminacion_cuenta(
         headers={"Authorization": request.headers.get("Authorization", "")}
     )
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
     if "detail" in core_response:
         raise HTTPException(status_code=400, detail=core_response["detail"])
     return core_response
@@ -296,7 +371,7 @@ async def solicitar_reactivacion_cuenta(
     body = await request.json()
     core_response = await core_client.post("/api/v1/clientes/auth/reactivar", json=body)
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
     return core_response
 
 
@@ -309,9 +384,30 @@ async def confirmar_cambio_email(
     body = await request.json()
     core_response = await core_client.post("/api/v1/clientes/auth/confirmar-cambio-email", json=body)
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
     if "detail" in core_response:
         raise HTTPException(status_code=400, detail=core_response["detail"])
+    return core_response
+
+
+@router.post("/confirmar-cambio-email-otp")
+async def confirmar_cambio_email_otp(
+        request: Request,
+        usuario: dict = Depends(get_current_user_payload)
+):
+    body = await request.json()
+    core_response = await core_client.post(
+        "/api/v1/clientes/auth/confirmar-cambio-email-otp",
+        json=body,
+        headers={"Authorization": request.headers.get("Authorization", "")}
+    )
+    if core_response is None:
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
+    if "detail" in core_response:
+        raise HTTPException(
+            status_code=core_response.get("_status_code", 400),
+            detail=core_response["detail"],
+        )
     return core_response
 
 
@@ -324,7 +420,7 @@ async def confirmar_eliminacion_cuenta(
     body = await request.json()
     core_response = await core_client.post("/api/v1/clientes/auth/confirmar-eliminacion", json=body)
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
     if "detail" in core_response:
         raise HTTPException(status_code=400, detail=core_response["detail"])
     return core_response
@@ -339,7 +435,7 @@ async def confirmar_reactivacion_cuenta(
     body = await request.json()
     core_response = await core_client.post("/api/v1/clientes/auth/confirmar-reactivacion", json=body)
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible. Intente más tarde.")
+        raise HTTPException(status_code=503, detail="CORE unavailable. Please try again later.")
     if "detail" in core_response:
         raise HTTPException(status_code=400, detail=core_response["detail"])
     return core_response

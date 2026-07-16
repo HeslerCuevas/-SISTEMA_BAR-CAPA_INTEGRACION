@@ -12,13 +12,13 @@ async def procesar_pedidos_pendientes(db: Session) -> Tuple[int, int]:
     pedidos_pendientes = db.exec(statement).all()
 
     if not pedidos_pendientes:
-        logger.info("No hay pedidos pendientes por sincronizar.")
+        logger.info("There are no pending orders to synchronize.")
         return 0, 0
 
     exitosos = 0
     fallidos = 0
 
-    logger.info(f"Iniciando sincronización de {len(pedidos_pendientes)} pedidos...")
+    logger.info(f"Starting synchronization of {len(pedidos_pendientes)} orders...")
 
     for pedido in pedidos_pendientes:
         try:
@@ -49,7 +49,7 @@ async def procesar_pedidos_pendientes(db: Session) -> Tuple[int, int]:
 
             if respuesta:
                 if pedido.estado == "FACTURADO":
-                    logger.info(f"El pedido {pedido.factura_local_uuid} fue cobrado offline. Facturando en el CORE...")
+                    logger.info(f"Order {pedido.factura_local_uuid} was paid offline. Invoicing in CORE...")
 
                     resp_factura = await core_client.post(
                         f"/api/v1/pedidos/{pedido.factura_local_uuid}/facturar",
@@ -57,23 +57,23 @@ async def procesar_pedidos_pendientes(db: Session) -> Tuple[int, int]:
                     )
 
                     if not resp_factura:
-                        logger.warning(f"Se subió el pedido {pedido.factura_local_uuid}, pero el CORE no lo facturó.")
+                        logger.warning(f"Order {pedido.factura_local_uuid} was uploaded, but CORE did not invoice it.")
 
                 pedido.estado_sincronizacion = "COMPLETADO"
                 pedido.ultimo_error = None
                 exitosos += 1
-                logger.info(f"Pedido {pedido.factura_local_uuid} sincronizado totalmente.")
+                logger.info(f"Order {pedido.factura_local_uuid} fully synchronized.")
             else:
                 pedido.intentos_sincronizacion += 1
-                pedido.ultimo_error = "CORE inalcanzable o devolvió error."
+                pedido.ultimo_error = "CORE unreachable or returned an error."
                 fallidos += 1
-                logger.warning(f"Fallo sync de {pedido.factura_local_uuid}. Intento {pedido.intentos_sincronizacion}")
+                logger.warning(f"Synchronization failed for {pedido.factura_local_uuid}. Attempt {pedido.intentos_sincronizacion}")
 
             db.add(pedido)
             db.commit()
 
         except Exception as e:
-            logger.error(f"Error crítico procesando pedido {pedido.factura_local_uuid}: {str(e)}")
+            logger.error(f"Critical error processing order {pedido.factura_local_uuid}: {str(e)}")
             pedido.intentos_sincronizacion += 1
             pedido.ultimo_error = str(e)
             db.add(pedido)

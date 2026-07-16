@@ -1,34 +1,93 @@
-import pytest
+from unittest.mock import AsyncMock, patch
+
 from fastapi.testclient import TestClient
 
-def test_vincular_mesa_invalida(client: TestClient):
-    payload = {"qr_token": "token_invalido"}
-    response = client.post("/api/v1/movil-mesas/vincular", json=payload)
-    # Because there is no core api fake running, or table isn't found, it should return 400 or 404
-    assert response.status_code in [400, 404, 502, 503]
 
-def test_llamar_mesero_mesa_no_existe(client: TestClient):
-    response = client.post("/api/v1/movil-mesas/999/llamar-mesero")
-    assert response.status_code in [404, 502, 503]
+def test_vincular_mesa_cliente_route_reenvia_a_core(client: TestClient):
+    payload = {"codigo_qr_mesa": "token_qr_1", "numero_mesa": 5}
+    core_response = {
+        "mensaje": "Mesa libre. Listo para pedir.",
+        "estado_mesa": "LIBRE",
+        "numero_mesa": 5,
+        "factura_local_uuid_activa": None,
+    }
 
-def test_solicitar_cuenta_movil_invalido(client: TestClient):
-    fake_uuid = "00000000-0000-0000-0000-000000000000"
-    response = client.post(f"/api/v1/pedidos-movil/{fake_uuid}/solicitar-cuenta")
-    # Will hit a 404 router since prefix might be wrong or it handles gracefully
-    assert response.status_code in [404, 502, 503]
+    with patch(
+        "app.api.routers.movil_mesas.core_client.post",
+        new=AsyncMock(return_value=core_response),
+    ) as mocked_post:
+        response = client.post("/api/v1/clientes/mesas/vincular", json=payload)
 
-def test_resumen_cuenta_movil_invalido(client: TestClient):
-    fake_uuid = "00000000-0000-0000-0000-000000000000"
-    response = client.get(f"/api/v1/pedidos-movil/{fake_uuid}/resumen")
-    assert response.status_code in [404, 502, 503]
+    assert response.status_code == 200
+    assert response.headers["X-Data-Source"] == "CORE"
+    assert response.json()["estado_mesa"] == "LIBRE"
+    mocked_post.assert_awaited_once_with("/api/v1/mesas/vincular", json=payload)
 
-def test_agregar_items_movil_invalid_payload(client: TestClient):
-    fake_uuid = "00000000-0000-0000-0000-000000000000"
-    payload = {"nuevos_detalles": []} # Empty details
-    response = client.patch(f"/api/v1/pedidos-movil/{fake_uuid}/agregar-items", json=payload)
-    assert response.status_code in [422, 400, 404]
 
-def test_promociones_evaluar_item(client: TestClient):
-    response = client.get("/api/v1/promociones/evaluar/item?producto_id=1&cantidad=2")
-    # Could be 200 with empty list or 404 if not found
-    assert response.status_code in [200, 404]
+def test_vincular_mesa_legacy_route_sigue_disponible(client: TestClient):
+    payload = {"codigo_qr_mesa": "token_qr_legacy", "numero_mesa": 8}
+    core_response = {
+        "mensaje": "Mesa libre. Listo para pedir.",
+        "estado_mesa": "LIBRE",
+        "numero_mesa": 8,
+        "factura_local_uuid_activa": None,
+    }
+
+    with patch(
+        "app.api.routers.movil_mesas.core_client.post",
+        new=AsyncMock(return_value=core_response),
+    ):
+        response = client.post("/api/v1/mesas/vincular", json=payload)
+
+    assert response.status_code == 200
+    assert response.headers["X-Data-Source"] == "CORE"
+
+
+def test_vincular_mesa_propagates_error_de_core(client: TestClient):
+    payload = {"codigo_qr_mesa": "token_invalido", "numero_mesa": 5}
+
+    with patch(
+        "app.api.routers.movil_mesas.core_client.post",
+        new=AsyncMock(
+            return_value={
+                "detail": "Código QR inválido o mesa inactiva.",
+                "_status_code": 404,
+            }
+        ),
+    ):
+        response = client.post("/api/v1/clientes/mesas/vincular", json=payload)
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Código QR inválido o mesa inactiva."
+
+
+def test_vincular_mesa_hace_fallback_local_si_core_esta_offline(client: TestClient):
+    payload = {"codigo_qr_mesa": "token_temporal", "numero_mesa": 5}
+
+    with patch(
+        "app.api.routers.movil_mesas.core_client.post",
+        new=AsyncMock(return_value=None),
+    ):
+        response = client.post("/api/v1/clientes/mesas/vincular", json=payload)
+
+    assert response.status_code == 200
+    assert response.headers["X-Data-Source"] == "CACHE_LOCAL"
+    assert response.json()["estado_mesa"] == "LIBRE"
+
+
+def test_llamar_mesero_cliente_route_reenvia_a_core(client: TestClient):
+    with patch(
+        "app.api.routers.movil_mesas.core_client.post",
+        new=AsyncMock(return_value={"mensaje": "Alerta enviada."}),
+    ) as mocked_post:
+        response = client.post(
+            "/api/v1/clientes/mesas/999/llamar-mesero",
+            json={"motivo_llamada": "Asistencia"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["X-Data-Source"] == "CORE"
+    mocked_post.assert_awaited_once_with(
+        "/api/v1/mesas/999/llamar-mesero",
+        json={"motivo_llamada": "Asistencia"},
+    )

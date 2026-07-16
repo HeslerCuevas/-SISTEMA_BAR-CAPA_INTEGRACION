@@ -5,7 +5,7 @@ from app.core.security import get_password_hash
 
 
 def fix_admin():
-    print("Iniciando actualización segura del administrador...")
+    print("Starting secure administrator update...")
     with Session(engine) as session:
         if not session.get(Rol, 1):
             session.add(Rol(id=1, nombre="Admin"))
@@ -16,14 +16,14 @@ def fix_admin():
         admin = session.get(Empleado, 1)
 
         if admin:
-            print(f"Actualizando datos del admin existente (ID: 1)...")
+            print(f"Updating existing administrator data (ID: 1)...")
             admin.documento_identidad = "admin"
             admin.nombre_completo = "Administrador de Sistema"
             admin.gmail = "admin@bar.com"
             admin.password_hash = get_password_hash("secreto123")
             admin.activo = True
         else:
-            print(f"Creando nuevo administrador (ID: 1)...")
+            print(f"Creating new administrator (ID: 1)...")
             admin = Empleado(
                 id=1,
                 rol_id=1,
@@ -38,10 +38,10 @@ def fix_admin():
 
         try:
             session.commit()
-            print("¡Administrador actualizado y listo para loguear!")
+            print("Administrator updated and ready to log in!")
         except Exception as e:
             session.rollback()
-            print(f"Error fatal: {e}")
+            print(f"Fatal error: {e}")
 
 
 if __name__ == "__main__":

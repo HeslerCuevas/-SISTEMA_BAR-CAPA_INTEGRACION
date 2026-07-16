@@ -18,7 +18,7 @@ async def forzar_sincronizacion_personal(
     if usuario_actual.get("canal") != "CAJA":
         raise HTTPException(
             status_code=403,
-            detail="Operación denegada. Solo terminales de caja pueden sincronizar catálogos."
+            detail="Operation denied. Only cash-register terminals can synchronize catalogs."
         )
 
     resultado = await sincronizar_personal_desde_core(db)
@@ -35,9 +35,9 @@ async def obtener_empleados_locales(
 ):
     try:
         await sincronizar_personal_desde_core(db)
-        print("Sincronización silenciosa exitosa antes de devolver empleados.")
+        print("Silent synchronization succeeded before returning employees.")
     except Exception as e:
-        print(f"Aviso: El CORE no está disponible para sincronización previa. Usando solo caché. Motivo: {e}")
+        print(f"Warning: CORE is unavailable for pre-synchronization. Using cache only. Reason: {e}")
 
     statement = select(Empleado).where(Empleado.activo == True)
     empleados_locales = db.exec(statement).all()
@@ -45,7 +45,7 @@ async def obtener_empleados_locales(
     if not empleados_locales:
         raise HTTPException(
             status_code=404,
-            detail="La caché local está vacía y el CORE no respondió para poblarla."
+            detail="The local cache is empty and CORE did not respond to populate it."
         )
 
     resultado = []
@@ -66,7 +66,7 @@ async def forzar_sincronizacion_personal(
     usuario_actual: dict = Depends(get_current_user_payload)
 ):
     if usuario_actual.get("canal") != "CAJA":
-        raise HTTPException(status_code=403, detail="Solo las cajas pueden sincronizar.")
+        raise HTTPException(status_code=403, detail="Only cash registers can synchronize.")
 
     resultado = await sincronizar_personal_desde_core(db)
 

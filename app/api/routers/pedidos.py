@@ -62,14 +62,14 @@ async def _push_pedido_to_core(pedido: PedidoOffline, db: Session) -> bool:
         if respuesta is not None and "detail" not in respuesta:
             pedido.estado_sincronizacion = "COMPLETADO"
             db.add(pedido)
-            logger.info(f"[PUSH-CORE] Pedido {pedido.factura_local_uuid} aceptado por CORE.")
+            logger.info(f"[PUSH-CORE] Order {pedido.factura_local_uuid} accepted by CORE.")
             return True
 
-        logger.warning(f"[PUSH-CORE] CORE rechazó pedido {pedido.factura_local_uuid}: {respuesta}")
+        logger.warning(f"[PUSH-CORE] CORE rejected order {pedido.factura_local_uuid}: {respuesta}")
         return False
 
     except Exception as exc:
-        logger.error(f"[PUSH-CORE] Error enviando {pedido.factura_local_uuid} al CORE: {exc}")
+        logger.error(f"[PUSH-CORE] Error sending {pedido.factura_local_uuid} to CORE: {exc}")
         return False
 
 async def intentar_sincronizar_pedido(pedido_uuid: uuid.UUID, data_pedido: dict):
@@ -86,9 +86,9 @@ async def intentar_sincronizar_pedido(pedido_uuid: uuid.UUID, data_pedido: dict)
             pedido.estado_sincronizacion = "COMPLETADO"
             session.add(pedido)
             session.commit()
-            logger.info(f"[IMMEDIATE-SYNC] Pedido {pedido_uuid} marcado como COMPLETADO.")
+            logger.info(f"[IMMEDIATE-SYNC] Order {pedido_uuid} marked as COMPLETED.")
         elif pedido:
-            pedido.ultimo_error = "CORE inalcanzable en intento inmediato."
+            pedido.ultimo_error = "CORE unreachable during immediate attempt."
             session.add(pedido)
             session.commit()
 
@@ -105,7 +105,7 @@ async def crear_pedido(
     pedido_existente = db.exec(statement).first()
 
     if pedido_existente:
-        print(f"Reintento detectado. Pedido {request.factura_local_uuid} ya estaba guardado.")
+        print(f"Retry detected. Order {request.factura_local_uuid} was already saved.")
         return {"mensaje": "Pedido ya existía", "factura_local_uuid": str(pedido_existente.factura_local_uuid)}
 
     nuevo_uuid = request.factura_local_uuid or uuid.uuid4()
@@ -115,7 +115,7 @@ async def crear_pedido(
         user_id = int(user_id_raw) if user_id_raw else None
         canal = usuario_actual.get("canal")
     except (ValueError, TypeError):
-        raise HTTPException(status_code=401, detail="ID de usuario no válido en el token.")
+        raise HTTPException(status_code=401, detail="User ID is invalid in the token.")
 
     empleado_movimiento_id = user_id if canal == "CAJA" and user_id else 1
 
@@ -187,7 +187,7 @@ async def crear_pedido(
 
         db.commit()
         db.refresh(nuevo_pedido)
-        logger.info(f"Pedido {nuevo_uuid} guardado localmente. Intentando sincronización inmediata con CORE...")
+        logger.info(f"Order {nuevo_uuid} saved locally. Attempting immediate synchronization with CORE...")
 
         # ── Inline CORE sync: push immediately so /facturar can bill right away ──
         # Build CORE payload from the already-stored detail UUIDs (detalles_para_core)
@@ -216,16 +216,16 @@ async def crear_pedido(
                 estado_actual = "COMPLETADO"  # capture before commit expires the object
                 db.add(nuevo_pedido)
                 db.commit()
-                logger.info(f"[INMEDIATO] Pedido {nuevo_uuid} sincronizado con CORE exitosamente.")
+                logger.info(f"[IMMEDIATE] Order {nuevo_uuid} synchronized with CORE successfully.")
             else:
                 estado_actual = "PENDIENTE"
-                logger.warning(f"[INMEDIATO] CORE no aceptó {nuevo_uuid}: {respuesta_core}. Quedará en cola.")
+                logger.warning(f"[IMMEDIATE] CORE did not accept {nuevo_uuid}: {respuesta_core}. It will be queued.")
         except Exception as sync_exc:
             estado_actual = "PENDIENTE"
-            logger.warning(f"[INMEDIATO] No se pudo sincronizar {nuevo_uuid} con CORE: {sync_exc}. Quedará en cola.")
+            logger.warning(f"[IMMEDIATE] Could not synchronize {nuevo_uuid} with CORE: {sync_exc}. It will be queued.")
 
         return PedidoResponse(
-            mensaje="Pedido registrado correctamente en el Gateway.",
+            mensaje="Order registered successfully in the Gateway.",
             factura_local_uuid=str(nuevo_uuid),
             estado_sincronizacion=estado_actual,
             propina_extra=request.propina_extra
@@ -233,8 +233,8 @@ async def crear_pedido(
 
     except Exception as e:
         db.rollback()
-        logger.error(f"Error DB local: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error interno en DB: {str(e)}")
+        logger.error(f"Local DB error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal DB error: {str(e)}")
 
 @router.post("/forzar-sincronizacion")
 async def forzar_sincronizacion_offline(
@@ -244,7 +244,7 @@ async def forzar_sincronizacion_offline(
     if usuario_actual.get("canal") != "CAJA":
         raise HTTPException(
             status_code=403,
-            detail="Operación no permitida. Solo disponible en terminales de Caja."
+            detail="Operation not allowed. Available only on cash-register terminals."
         )
 
     exitosos, fallidos = await procesar_pedidos_pendientes(db)
@@ -270,7 +270,7 @@ async def facturar_pedido(
     ).first()
 
     if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado en el Gateway.")
+        raise HTTPException(status_code=404, detail="Order not found in the Gateway.")
 
     if pedido.estado == "FACTURADO":
         return {
@@ -316,10 +316,10 @@ async def facturar_pedido(
         # Without this, CORE returns 404 when /facturar is called immediately
         # after POST /pedidos/ because the background sync hasn't run yet.
         if pedido.estado_sincronizacion != "COMPLETADO":
-            logger.info(f"[FACTURAR] Pedido {factura_local_uuid} aún no está en CORE. Enviando ahora...")
+            logger.info(f"[INVOICE] Order {factura_local_uuid} is not yet in CORE. Sending now...")
             pushed = await _push_pedido_to_core(pedido, db)
             if not pushed:
-                logger.warning(f"[FACTURAR] No se pudo enviar {factura_local_uuid} al CORE. Modo offline.")
+                logger.warning(f"[INVOICE] Could not send {factura_local_uuid} to CORE. Offline mode.")
                 return {
                     "mensaje": "Pedido facturado localmente. El CORE no está disponible, se reintentará.",
                     "sync": "PENDIENTE"
@@ -343,10 +343,10 @@ async def facturar_pedido(
             }
 
         error_detail = respuesta_core.get("detail", "Respuesta inesperada") if respuesta_core else "CORE no respondió"
-        logger.error(f"[FACTURAR] CORE rechazó /facturar para {factura_local_uuid}: {error_detail}")
+        logger.error(f"[INVOICE] CORE rejected /facturar for {factura_local_uuid}: {error_detail}")
 
     except Exception as e:
-        logger.warning(f"[FACTURAR] Fallo de sincronización con CORE para {factura_local_uuid}: {e}")
+        logger.warning(f"[INVOICE] Synchronization failed with CORE for {factura_local_uuid}: {e}")
 
     return {
         "mensaje": "Pedido facturado exitosamente (Modo Offline). El sistema lo enviará a la nube en breve.",
@@ -362,7 +362,7 @@ async def cancelar_pedido(
     pedido = db.exec(select(PedidoOffline).where(PedidoOffline.factura_local_uuid == factura_local_uuid)).first()
 
     if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado en la Capa de Integracion.")
+        raise HTTPException(status_code=404, detail="Order not found in the Integration Layer.")
 
     if pedido.estado_sincronizacion == "CANCELADO":
         return {"mensaje": "El pedido ya estaba cancelado localmente."}
@@ -385,7 +385,7 @@ async def cancelar_pedido(
             return {"mensaje": f"Pedido {factura_local_uuid} cancelado en local y sincronizado con CORE."}
 
     except Exception as e:
-        logger.error(f"Error notificando cancelación al CORE: {e}")
+        logger.error(f"Error notifying CORE of cancellation: {e}")
 
     return {
         "mensaje": "Pedido cancelado localmente. El CORE no respondió, se reintentará la sincronización.",
@@ -423,6 +423,42 @@ async def obtener_pedidos_pendientes_caja(
     return resultado
 
 
+@router.get("/{factura_local_uuid}")
+async def obtener_detalle_pedido_para_caja(
+        factura_local_uuid: uuid.UUID,
+        db: Session = Depends(get_session)
+):
+    """Return a remote order and its line items for CAJA's Active Tables flow."""
+    pedido = db.get(PedidoOffline, factura_local_uuid)
+    if not pedido:
+        raise HTTPException(status_code=404, detail="Order not found.")
+
+    detalles = db.exec(
+        select(DetallePedidoOffline).where(
+            DetallePedidoOffline.factura_local_uuid == factura_local_uuid
+        )
+    ).all()
+
+    return {
+        "factura_local_uuid": str(pedido.factura_local_uuid),
+        "mesa": pedido.mesa,
+        "canal_origen": pedido.canal_origen,
+        "estado": pedido.estado,
+        "items": [
+            {
+                "detalle_local_uuid": str(detalle.detalle_local_uuid),
+                "producto_id": detalle.producto_id,
+                "cantidad": detalle.cantidad,
+                "precio_unitario_historico": detalle.precio_unitario_historico,
+                "impuesto_historico": detalle.impuesto_historico,
+                "monto_impuesto": detalle.monto_impuesto,
+                "subtotal_linea": detalle.subtotal_linea,
+            }
+            for detalle in detalles
+        ],
+    }
+
+
 # ─── Resumen de cuenta (con fallback local) ───────────────────────────────────
 
 @router.get("/{factura_local_uuid}/resumen", response_model=ResumenCuentaResponse)
@@ -438,7 +474,7 @@ async def resumen_cuenta(
     # Fallback: build resumen from local tables
     pedido = db.get(PedidoOffline, factura_local_uuid)
     if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
+        raise HTTPException(status_code=404, detail="Order not found.")
 
     detalles = db.exec(
         select(DetallePedidoOffline).where(DetallePedidoOffline.factura_local_uuid == factura_local_uuid)
@@ -477,7 +513,7 @@ async def agregar_items(
     """Adds items to an existing order. Writes locally first for POS/offline resilience, then syncs CORE."""
     pedido = db.get(PedidoOffline, factura_local_uuid)
     if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
+        raise HTTPException(status_code=404, detail="Order not found.")
 
     pedido.subtotal += Decimal(str(payload.nuevo_subtotal_agregado))
     pedido.total_impuestos += Decimal(str(payload.nuevo_impuesto_agregado))
@@ -513,9 +549,9 @@ async def agregar_items(
 async def _sync_agregar_items_core(factura_local_uuid: uuid.UUID, payload: dict):
     try:
         await core_client.patch(f"/api/v1/pedidos/{factura_local_uuid}/agregar-items", json=payload)
-        logger.info(f"[BG-SYNC] Items de {factura_local_uuid} sincronizados con CORE.")
+        logger.info(f"[BG-SYNC] Items for {factura_local_uuid} synchronized with CORE.")
     except Exception as e:
-        logger.error(f"[BG-SYNC] Fallo al sincronizar items con CORE: {e}")
+        logger.error(f"[BG-SYNC] Failed to synchronize items with CORE: {e}")
 
 
 # ─── Solicitar cuenta ─────────────────────────────────────────────────────────
@@ -531,7 +567,7 @@ async def solicitar_cuenta(
         select(PedidoOffline).where(PedidoOffline.factura_local_uuid == factura_local_uuid)
     ).first()
     if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
+        raise HTTPException(status_code=404, detail="Order not found.")
 
     pedido.propina_extra = payload.propina_extra
     pedido.total_general = pedido.subtotal + pedido.total_impuestos + pedido.propina_legal + pedido.propina_extra
@@ -559,14 +595,14 @@ async def dividir_cuenta(
     """Proxies split-bill calculation to CORE (stateless, no local storage needed)."""
     pedido = db.get(PedidoOffline, factura_local_uuid)
     if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
+        raise HTTPException(status_code=404, detail="Order not found.")
 
     core_response = await core_client.post(
         f"/api/v1/pedidos/{factura_local_uuid}/dividir-cuenta",
         json=payload
     )
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible para dividir la cuenta.")
+        raise HTTPException(status_code=503, detail="CORE unavailable to split the bill.")
     if "detail" in core_response:
         raise HTTPException(status_code=400, detail=core_response["detail"])
     return core_response
@@ -580,11 +616,11 @@ async def obtener_division_cuenta(
     """Fetches split-bill result from CORE."""
     pedido = db.get(PedidoOffline, factura_local_uuid)
     if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
+        raise HTTPException(status_code=404, detail="Order not found.")
 
     core_response = await core_client.get(f"/api/v1/pedidos/{factura_local_uuid}/division-cuenta")
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible.")
+        raise HTTPException(status_code=503, detail="CORE unavailable.")
     if "detail" in core_response:
         raise HTTPException(status_code=404, detail=core_response["detail"])
     return core_response
@@ -609,7 +645,7 @@ async def agregar_modificador_item(
         json=payload
     )
     if core_response is None:
-        raise HTTPException(status_code=503, detail="CORE no disponible. El modificador no pudo ser registrado.")
+        raise HTTPException(status_code=503, detail="CORE unavailable. The modifier could not be registered.")
     if "detail" in core_response:
         raise HTTPException(status_code=400, detail=core_response["detail"])
     return core_response

@@ -26,6 +26,7 @@ class ClienteRegistroResponse(BaseModel):
     mensaje: str
     cliente_id: int
     email: str
+    email_verificado: bool
 
 class ClienteLoginRequest(BaseModel):
     email: str
@@ -37,3 +38,5 @@ class ClienteLoginResponse(BaseModel):
     canal: str
     cliente_id: int
     nombre_completo: str
+    email: str
+    email_verificado: bool
