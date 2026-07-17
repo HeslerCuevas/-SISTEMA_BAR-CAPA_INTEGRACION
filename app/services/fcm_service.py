@@ -1,8 +1,18 @@
 import logging
 
+import firebase_admin
 from firebase_admin import messaging
 
 logger = logging.getLogger(__name__)
+
+
+def _firebase_is_ready() -> bool:
+    """Avoid attempting delivery before the Gateway lifespan initialized FCM."""
+    try:
+        firebase_admin.get_app()
+        return True
+    except ValueError:
+        return False
 
 
 def enviar_notificacion_pago(token_fcm: str, factura_uuid: str):
@@ -12,6 +22,13 @@ def enviar_notificacion_pago(token_fcm: str, factura_uuid: str):
     been marked as paid before this background task runs, so a transient FCM
     or Internet failure must never bubble up through Starlette as an API error.
     """
+    if not _firebase_is_ready():
+        logger.error(
+            "Cannot send payment notification for order %s: Firebase Admin is not initialized.",
+            factura_uuid,
+        )
+        return None
+
     message = messaging.Message(
         data={
             "action": "ORDER_PAID",
@@ -57,6 +74,13 @@ def enviar_notificacion_pago(token_fcm: str, factura_uuid: str):
 
 def enviar_notificacion_pago_rechazado(token_fcm: str, factura_uuid: str):
     """Tell the mobile app that CAJA rejected the payment request."""
+    if not _firebase_is_ready():
+        logger.error(
+            "Cannot send payment rejection notification for order %s: Firebase Admin is not initialized.",
+            factura_uuid,
+        )
+        return None
+
     message = messaging.Message(
         data={
             "action": "ORDER_PAYMENT_FAILED",

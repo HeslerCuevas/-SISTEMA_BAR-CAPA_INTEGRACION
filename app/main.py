@@ -56,13 +56,21 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(auto_sync_worker())
     print("Automatic synchronization worker started.")
     try:
-        ruta_cert = Path("firebase-adminsdk.json")
+        # Resolve this from the application package rather than from the
+        # process working directory.  The Gateway can be started from the
+        # repository root, a service manager, or an IDE, none of which put the
+        # certificate in the current directory.
+        ruta_cert = Path(__file__).resolve().parent / "firebase-adminsdk.json"
         if ruta_cert.exists():
-            cred = credentials.Certificate(str(ruta_cert))
-            firebase_admin.initialize_app(cred)
-            print("Firebase Admin SDK initialized successfully.")
+            try:
+                firebase_admin.get_app()
+                print("Firebase Admin SDK is already initialized.")
+            except ValueError:
+                cred = credentials.Certificate(str(ruta_cert))
+                firebase_admin.initialize_app(cred)
+                print("Firebase Admin SDK initialized successfully.")
         else:
-            print("WARNING: 'firebase-adminsdk.json' was not found. Push notifications will not work.")
+            print(f"WARNING: Firebase credential was not found at {ruta_cert}. Push notifications will not work.")
     except Exception as e:
         print(f"Error initializing Firebase: {e}")
 
